@@ -52,6 +52,7 @@ class APIKeyRequest(BaseModel):
     provider: str
     name: str
     key: str
+    model_name: Optional[str] = None
 
 
 @app.get("/health")
@@ -117,7 +118,8 @@ async def add_api_key(request: APIKeyRequest):
         rag_system.add_api_key(
             provider=request.provider,
             name=request.name,
-            key=request.key
+            key=request.key,
+            model_name=request.model_name
         )
         return {"status": "success"}
     except Exception as e:

@@ -41,7 +41,7 @@ pydub
 librosa
 
 # Video Processing
-moviepy
+moviepy<2.0.0
 
 # OCR
 pytesseract

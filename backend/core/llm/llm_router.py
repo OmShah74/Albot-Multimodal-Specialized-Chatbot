@@ -29,12 +29,13 @@ class LLMRouter:
         self.config = config
         self.clients: Dict[str, Any] = {}
         
-    def add_api_key(self, provider: LLMProvider, name: str, key: str):
+    def add_api_key(self, provider: LLMProvider, name: str, key: str, model_name: Optional[str] = None):
         """Add an API key instance"""
         instance = APIKeyInstance(
             name=name,
             key=key,
             provider=provider,
+            model_name=model_name,
             active=True
         )
         
@@ -139,24 +140,24 @@ class LLMRouter:
         """Call specific provider"""
         
         if provider == LLMProvider.OPENAI:
-            return self._call_openai(instance.key, messages, system_prompt, max_tokens, temperature)
+            return self._call_openai(instance.key, messages, system_prompt, max_tokens, temperature, instance.model_name)
         
         elif provider == LLMProvider.ANTHROPIC:
-            return self._call_anthropic(instance.key, messages, system_prompt, max_tokens, temperature)
+            return self._call_anthropic(instance.key, messages, system_prompt, max_tokens, temperature, instance.model_name)
         
         elif provider == LLMProvider.GROQ:
-            return self._call_groq(instance.key, messages, system_prompt, max_tokens, temperature)
+            return self._call_groq(instance.key, messages, system_prompt, max_tokens, temperature, instance.model_name)
         
         elif provider == LLMProvider.GEMINI:
-            return self._call_gemini(instance.key, messages, system_prompt, max_tokens, temperature)
+            return self._call_gemini(instance.key, messages, system_prompt, max_tokens, temperature, instance.model_name)
         
         elif provider == LLMProvider.OPENROUTER:
-            return self._call_openrouter(instance.key, messages, system_prompt, max_tokens, temperature)
+            return self._call_openrouter(instance.key, messages, system_prompt, max_tokens, temperature, instance.model_name)
         
         else:
             raise ValueError(f"Unknown provider: {provider}")
     
-    def _call_openai(self, api_key: str, messages: List[Dict], system: Optional[str], max_tokens: int, temp: float) -> str:
+    def _call_openai(self, api_key: str, messages: List[Dict], system: Optional[str], max_tokens: int, temp: float, model: Optional[str] = None) -> str:
         """OpenAI API call"""
         client = openai.OpenAI(api_key=api_key)
         
@@ -164,7 +165,7 @@ class LLMRouter:
             messages = [{"role": "system", "content": system}] + messages
         
         response = client.chat.completions.create(
-            model="gpt-4-turbo-preview",
+            model=model or "gpt-4-turbo-preview",
             messages=messages,
             max_tokens=max_tokens,
             temperature=temp
@@ -172,12 +173,12 @@ class LLMRouter:
         
         return response.choices[0].message.content
     
-    def _call_anthropic(self, api_key: str, messages: List[Dict], system: Optional[str], max_tokens: int, temp: float) -> str:
+    def _call_anthropic(self, api_key: str, messages: List[Dict], system: Optional[str], max_tokens: int, temp: float, model: Optional[str] = None) -> str:
         """Anthropic API call"""
         client = Anthropic(api_key=api_key)
         
         response = client.messages.create(
-            model="claude-3-5-sonnet-20241022",
+            model=model or "claude-3-5-sonnet-20241022",
             max_tokens=max_tokens,
             temperature=temp,
             system=system or "",
@@ -186,7 +187,7 @@ class LLMRouter:
         
         return response.content[0].text
     
-    def _call_groq(self, api_key: str, messages: List[Dict], system: Optional[str], max_tokens: int, temp: float) -> str:
+    def _call_groq(self, api_key: str, messages: List[Dict], system: Optional[str], max_tokens: int, temp: float, model: Optional[str] = None) -> str:
         """Groq API call"""
         client = Groq(api_key=api_key)
         
@@ -194,7 +195,7 @@ class LLMRouter:
             messages = [{"role": "system", "content": system}] + messages
         
         response = client.chat.completions.create(
-            model="mixtral-8x7b-32768",
+            model=model or "mixtral-8x7b-32768",
             messages=messages,
             max_tokens=max_tokens,
             temperature=temp
@@ -202,10 +203,10 @@ class LLMRouter:
         
         return response.choices[0].message.content
     
-    def _call_gemini(self, api_key: str, messages: List[Dict], system: Optional[str], max_tokens: int, temp: float) -> str:
+    def _call_gemini(self, api_key: str, messages: List[Dict], system: Optional[str], max_tokens: int, temp: float, model_name: Optional[str] = None) -> str:
         """Google Gemini API call"""
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-pro')
+        model = genai.GenerativeModel(model_name or 'gemini-pro')
         
         # Convert messages to Gemini format
         prompt = ""
@@ -227,7 +228,7 @@ class LLMRouter:
         
         return response.text
     
-    def _call_openrouter(self, api_key: str, messages: List[Dict], system: Optional[str], max_tokens: int, temp: float) -> str:
+    def _call_openrouter(self, api_key: str, messages: List[Dict], system: Optional[str], max_tokens: int, temp: float, model: Optional[str] = None) -> str:
         """OpenRouter API call"""
         client = openai.OpenAI(
             base_url="https://openrouter.ai/api/v1",
@@ -238,7 +239,7 @@ class LLMRouter:
             messages = [{"role": "system", "content": system}] + messages
         
         response = client.chat.completions.create(
-            model="anthropic/claude-3.5-sonnet",
+            model=model or "anthropic/claude-3.5-sonnet",
             messages=messages,
             max_tokens=max_tokens,
             temperature=temp

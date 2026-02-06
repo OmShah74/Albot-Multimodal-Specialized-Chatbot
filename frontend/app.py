@@ -3,7 +3,7 @@ Gradio Frontend for Multimodal RAG System
 """
 import gradio as gr
 import requests
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 from loguru import logger
 
 API_BASE = "http://localhost:8000"
@@ -33,12 +33,15 @@ class RAGInterface:
         except Exception as e:
             return f"Error: {str(e)}"
     
-    def query(self, question: str, history: List[Tuple[str, str]]) -> Tuple:
+    def query(self, question: str, history: List[Dict[str, str]]) -> Tuple:
         """Process query"""
         if not question.strip():
             return history, ""
         
         try:
+            # Append user message
+            history.append({"role": "user", "content": question})
+            
             response = requests.post(
                 f"{API_BASE}/query",
                 json={"query": question}
@@ -50,27 +53,33 @@ class RAGInterface:
             else:
                 answer = f"Error: {response.text}"
             
-            history.append((question, answer))
+            # Append assistant message
+            history.append({"role": "assistant", "content": answer})
             return history, ""
             
         except Exception as e:
             logger.error(f"Query error: {e}")
-            history.append((question, f"Error: {str(e)}"))
+            history.append({"role": "assistant", "content": f"Error: {str(e)}"})
             return history, ""
     
-    def add_api_key(self, provider: str, name: str, key: str) -> str:
+    def add_api_key(self, provider: str, name: str, key: str, model_name: str = "") -> str:
         """Add API key"""
         if not all([provider, name, key]):
             return "All fields required"
         
         try:
+            payload = {
+                "provider": provider.lower(),
+                "name": name,
+                "key": key
+            }
+            
+            if model_name.strip():
+                payload["model_name"] = model_name.strip()
+            
             response = requests.post(
                 f"{API_BASE}/api-keys/add",
-                json={
-                    "provider": provider.lower(),
-                    "name": name,
-                    "key": key
-                }
+                json=payload
             )
             
             if response.status_code == 200:
@@ -79,12 +88,18 @@ class RAGInterface:
                     self.api_keys[provider] = []
                 self.api_keys[provider].append(name)
                 
-                return f"✓ Added {provider} key: {name}"
+                msg = f"✓ Added {provider} key: {name}"
+                if model_name.strip():
+                    msg += f" (Model: {model_name.strip()})"
+                return msg
             else:
                 return f"Error: {response.text}"
                 
         except Exception as e:
             return f"Error: {str(e)}"
+    
+    def get_stats(self) -> str:
+        """Get system statistics"""
     
     def get_stats(self) -> str:
         """Get system statistics"""
@@ -189,12 +204,14 @@ with gr.Blocks(title="Multimodal RAG System", theme=gr.themes.Soft()) as demo:
                 key_name = gr.Textbox(label="Key Name", placeholder="My Key 1")
             
             api_key = gr.Textbox(label="API Key", type="password")
+            model_name = gr.Textbox(label="Model Name (Optional)", placeholder="e.g. gpt-4, claude-3-opus")
+            
             add_key_btn = gr.Button("Add Key", variant="primary")
             key_output = gr.Textbox(label="Status")
             
             add_key_btn.click(
                 interface.add_api_key,
-                inputs=[provider, key_name, api_key],
+                inputs=[provider, key_name, api_key, model_name],
                 outputs=[key_output]
             )
             

@@ -222,12 +222,12 @@ class RAGOrchestrator:
             logger.error(f"LLM synthesis failed: {e}")
             return f"Error generating response: {str(e)}"
     
-    def add_api_key(self, provider: str, name: str, key: str):
+    def add_api_key(self, provider: str, name: str, key: str, model_name: Optional[str] = None):
         """Add API key to LLM router"""
         from backend.models.config import LLMProvider
         
         provider_enum = LLMProvider(provider.lower())
-        self.llm_router.add_api_key(provider_enum, name, key)
+        self.llm_router.add_api_key(provider_enum, name, key, model_name)
     
     def get_statistics(self) -> Dict:
         """Get system statistics"""

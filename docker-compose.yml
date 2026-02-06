@@ -27,6 +27,8 @@ services:
     volumes:
       - ./data:/app/data
       - ./config:/app/config
+      - ./backend:/app/backend
+      - ./frontend:/app/frontend
     environment:
       - ARANGO_HOST=arangodb
       - ARANGO_PORT=8529

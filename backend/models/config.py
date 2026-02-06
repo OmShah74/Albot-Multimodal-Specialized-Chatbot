@@ -48,6 +48,7 @@ class APIKeyInstance(BaseModel):
     name: str
     key: str
     provider: LLMProvider
+    model_name: Optional[str] = None
     active: bool = True
     request_count: int = 0
     error_count: int = 0
