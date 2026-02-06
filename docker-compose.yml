@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  arangodb:
+    image: arangodb:latest
+    container_name: multimodal-rag-arangodb
+    environment:
+      - ARANGO_ROOT_PASSWORD=rootpassword
+      - ARANGO_NO_AUTH=0
+    ports:
+      - "8529:8529"
+    volumes:
+      - arango-data:/var/lib/arangodb3
+      - arango-apps:/var/lib/arangodb3-apps
+    restart: unless-stopped
+    networks:
+      - rag-network
+
+  app:
+    build: .
+    container_name: multimodal-rag-app
+    depends_on:
+      - arangodb
+    ports:
+      - "7860:7860"  # Gradio
+      - "8000:8000"  # FastAPI
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config
+    environment:
+      - ARANGO_HOST=arangodb
+      - ARANGO_PORT=8529
+      - ARANGO_USERNAME=root
+      - ARANGO_PASSWORD=rootpassword
+      - ARANGO_DATABASE=multimodal_rag
+    restart: unless-stopped
+    networks:
+      - rag-network
+
+
+volumes:
+  arango-data:
+  arango-apps:
+
+networks:
+  rag-network:
+    driver: bridge

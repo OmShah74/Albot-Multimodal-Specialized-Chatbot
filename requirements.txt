@@ -1,0 +1,87 @@
+# FastAPI Backend
+fastapi
+uvicorn[standard]
+python-multipart
+pydantic
+pydantic-settings
+
+# Gradio Frontend
+gradio
+
+# Database - ArangoDB
+python-arango
+
+# Vector Operations
+numpy<2.0.0
+scipy
+scikit-learn
+
+# Embeddings
+sentence-transformers
+transformers
+torch
+
+# Graph Processing
+networkx
+python-louvain
+
+# Multimodal Processing
+pypdf
+pdfplumber
+python-pptx
+python-docx
+openpyxl
+pandas
+pillow
+opencv-python
+
+# Audio Processing
+openai-whisper
+pydub
+librosa
+
+# Video Processing
+moviepy
+
+# OCR
+pytesseract
+
+# Web Scraping
+playwright
+beautifulsoup4
+readability-lxml
+yt-dlp
+requests
+
+# Search Engines
+duckduckgo-search
+
+# LLM Clients
+openai
+anthropic
+google-generativeai
+groq
+
+# NLP
+spacy
+en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.0/en_core_web_sm-3.7.0-py3-none-any.whl
+
+# Optimization
+scipy
+bayesian-optimization
+
+# BM25
+rank-bm25
+
+# Utils
+python-dotenv
+aiofiles
+httpx
+tqdm
+loguru
+
+# Caching
+diskcache
+
+# Rate Limiting
+ratelimit
