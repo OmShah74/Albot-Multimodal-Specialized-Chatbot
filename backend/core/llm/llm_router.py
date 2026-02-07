@@ -52,6 +52,20 @@ class LLMRouter:
                 inst for inst in self.config.instances[provider]
                 if inst.name != name
             ]
+
+    def get_api_keys(self) -> Dict[str, List[Dict]]:
+        """Get all API keys (masked)"""
+        result = {}
+        for provider, instances in self.config.instances.items():
+            result[provider.value] = []
+            for inst in instances:
+                result[provider.value].append({
+                    "name": inst.name,
+                    "key": f"{inst.key[:4]}...{inst.key[-4:]}" if len(inst.key) > 8 else "****",
+                    "model_name": inst.model_name,
+                    "active": inst.active
+                })
+        return result
     
     def complete(
         self,

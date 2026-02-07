@@ -16,25 +16,44 @@ services:
     networks:
       - rag-network
 
-  app:
+  backend:
     build: .
-    container_name: multimodal-rag-app
+    container_name: multimodal-rag-backend
+    command: uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
     depends_on:
       - arangodb
     ports:
-      - "7860:7860"  # Gradio
-      - "8000:8000"  # FastAPI
+      - "8000:8000"
     volumes:
       - ./data:/app/data
       - ./config:/app/config
       - ./backend:/app/backend
-      - ./frontend:/app/frontend
+      # Exclude venv if it exists
+      - /app/backend/venv
     environment:
       - ARANGO_HOST=arangodb
       - ARANGO_PORT=8529
       - ARANGO_USERNAME=root
       - ARANGO_PASSWORD=rootpassword
       - ARANGO_DATABASE=multimodal_rag
+    restart: unless-stopped
+    networks:
+      - rag-network
+
+  frontend:
+    build: ./frontend
+    container_name: multimodal-rag-frontend
+    command: npm run dev
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    environment:
+      - NEXT_PUBLIC_API_URL=http://127.0.0.1:8000
+    depends_on:
+      - backend
     restart: unless-stopped
     networks:
       - rag-network

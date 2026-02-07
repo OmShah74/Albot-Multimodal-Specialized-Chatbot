@@ -131,9 +131,9 @@ class RetrievalResult(BaseModel):
 
 class SearchConfig(BaseModel):
     """Search configuration"""
-    top_k_vector: int = 20
-    top_k_graph: int = 15
-    top_k_bm25: int = 10
+    top_k_vector: int = 5
+    top_k_graph: int = 5
+    top_k_bm25: int = 3
     graph_hops: int = 2
     pagerank_alpha: float = 0.15
     diversity_lambda: float = 0.3

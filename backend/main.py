@@ -13,9 +13,16 @@ from backend.core.orchestrator import RAGOrchestrator
 app = FastAPI(title="Multimodal RAG API")
 
 # CORS
+# CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+        "*" # Keep wildcard for now but credential issue might persist if * is used with credentials
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -124,6 +131,15 @@ async def add_api_key(request: APIKeyRequest):
         return {"status": "success"}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api-keys/list")
+async def list_api_keys():
+    """List all API keys"""
+    try:
+        return rag_system.get_api_keys()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/statistics")

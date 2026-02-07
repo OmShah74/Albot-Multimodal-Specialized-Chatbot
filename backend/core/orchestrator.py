@@ -185,23 +185,30 @@ class RAGOrchestrator:
         """Format retrieval results for LLM context"""
         evidence_parts = []
         
-        for i, result in enumerate(results[:10], 1):
+        for i, result in enumerate(results[:5], 1):
+            # Truncate content to avoid hitting token limits (approx 1500 chars ~ 300-400 tokens)
+            content_preview = result.content[:1500] + "..." if len(result.content) > 1500 else result.content
+            
             evidence_parts.append(
-                f"[{i}] {result.content}\n"
+                f"[{i}] {content_preview}\n"
                 f"   (Score: {result.score:.3f}, Modality: {result.modality.value})"
             )
             
             # Add context if available
             if result.context:
-                for ctx in result.context[:2]:
-                    evidence_parts.append(f"   Context: {ctx[:200]}...")
+                for ctx in result.context[:1]:
+                    evidence_parts.append(f"   Context: {ctx[:150]}...")
         
         return "\n\n".join(evidence_parts)
     
     def _synthesize_answer(self, query: str, evidence: str) -> str:
         """Use LLM to synthesize final answer"""
         
-        system_prompt = """You are a helpful AI assistant. Use the provided evidence to answer the user's question accurately and concisely. Cite specific evidence when relevant."""
+        system_prompt = """You are a helpful AI assistant. 
+        1. Use the provided evidence to answer the user's question accurately and concisely. Cite specific evidence when relevant.
+        2. If the evidence is not relevant or insufficient, use your own internal knowledge to answer the question helpfuly.
+        3. Prioritize evidence over internal knowledge if there is a conflict.
+        """
         
         messages = [
             {
@@ -226,8 +233,12 @@ class RAGOrchestrator:
         """Add API key to LLM router"""
         from backend.models.config import LLMProvider
         
-        provider_enum = LLMProvider(provider.lower())
+        provider_enum = LLMProvider(provider.lower().strip())
         self.llm_router.add_api_key(provider_enum, name, key, model_name)
+
+    def get_api_keys(self) -> Dict:
+        """Get all API keys"""
+        return self.llm_router.get_api_keys()
     
     def get_statistics(self) -> Dict:
         """Get system statistics"""

@@ -1,0 +1,25 @@
+# Git
+.git
+.gitignore
+.dockerignore
+
+# Virtual Env
+venv/
+env/
+__pycache__/
+*.pyc
+
+# Data (Mounted volumes, do not build)
+data/
+data/models/
+data/database/
+data/uploads/
+
+# Frontend (Builds separately)
+frontend/
+node_modules/
+.next/
+
+# Env (Do not bake secrets)
+.env
+.env.example
