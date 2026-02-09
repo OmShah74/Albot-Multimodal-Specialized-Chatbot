@@ -84,6 +84,13 @@ class ArangoStorageManager:
             logger.info(f"Created edge collection: {self.config.edges_collection}")
         else:
             self.edges_collection = self.db.collection(self.config.edges_collection)
+
+        # System configuration collection
+        if not self.db.has_collection("system_config"):
+            self.system_config = self.db.create_collection("system_config")
+            logger.info("Created collection: system_config")
+        else:
+            self.system_config = self.db.collection("system_config")
     
     def _initialize_graph(self):
         """Create graph if it doesn't exist"""
@@ -454,6 +461,87 @@ class ArangoStorageManager:
         cursor = self.db.aql.execute(query)
         return {r['resolution']: r['count'] for r in cursor}
     
+    def list_sources(self) -> List[str]:
+        """List all unique sources in the database"""
+        query = f"""
+        FOR doc IN {self.config.nodes_collection}
+            RETURN DISTINCT doc.source
+        """
+        cursor = self.db.aql.execute(query)
+        return [s for s in cursor if s]
+
+    def delete_document(self, source_name: str) -> int:
+        """
+        Delete all nodes and edges associated with a source
+        Returns number of deleted nodes
+        """
+        # 1. Get all node IDs for this source
+        id_query = f"FOR doc IN {self.config.nodes_collection} FILTER doc.source == @source RETURN doc._id"
+        cursor = self.db.aql.execute(id_query, bind_vars={'source': source_name})
+        node_ids = list(cursor)
+        
+        if not node_ids:
+            return 0
+            
+        # 2. Delete edges connected to these nodes
+        # Use a single query to find and remove all relevant edges
+        edge_query = f"""
+        FOR e IN {self.config.edges_collection}
+            FILTER e._from IN @node_ids OR e._to IN @node_ids
+            REMOVE e IN {self.config.edges_collection}
+            OPTIONS {{ ignoreErrors: true }}
+        """
+        self.db.aql.execute(edge_query, bind_vars={'node_ids': node_ids})
+        
+        # 3. Delete the nodes
+        node_removal_query = f"""
+        FOR doc IN {self.config.nodes_collection}
+            FILTER doc._id IN @node_ids
+            REMOVE doc IN {self.config.nodes_collection}
+            OPTIONS {{ ignoreErrors: true }}
+        """
+        self.db.aql.execute(node_removal_query, bind_vars={'node_ids': node_ids})
+        
+        logger.info(f"Deleted source '{source_name}': {len(node_ids)} nodes removed.")
+        return len(node_ids)
+
+    def clear_database(self):
+        """Clear all data from database"""
+        self.db.collection(self.config.nodes_collection).truncate()
+        self.db.collection(self.config.edges_collection).truncate()
+        logger.info("Database cleared")
+
+    def save_api_key(self, provider: str, name: str, key: str, model_name: Optional[str] = None):
+        """Persistently save an API key"""
+        coll = self.db.collection("system_config")
+        # Sanitize name for use in _key (ArangoDB keys can't have spaces)
+        safe_name = "".join([c if c.isalnum() or c in "-_" else "_" for c in name])
+        key_id = f"api_key_{provider.lower()}_{safe_name}"
+        data = {
+            "_key": key_id,
+            "type": "api_key",
+            "provider": provider,
+            "name": name, # Keep original name in data
+            "key": key,
+            "model_name": model_name
+        }
+        coll.insert(data, overwrite=True)
+
+    def list_api_keys(self) -> List[Dict]:
+        """List all persistent API keys"""
+        query = "FOR doc IN system_config FILTER doc.type == 'api_key' RETURN doc"
+        cursor = self.db.aql.execute(query)
+        return [doc for doc in cursor]
+
+    def delete_api_key(self, provider: str, name: str):
+        """Delete a persistent API key"""
+        # Use same sanitization logic
+        safe_name = "".join([c if c.isalnum() or c in "-_" else "_" for c in name])
+        key_id = f"api_key_{provider.lower()}_{safe_name}"
+        coll = self.db.collection("system_config")
+        if coll.has(key_id):
+            coll.delete(key_id)
+
     def close(self):
         """Close database connection"""
         if self.client:

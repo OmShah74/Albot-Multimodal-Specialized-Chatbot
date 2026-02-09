@@ -3,6 +3,7 @@ import { Send,  Paperclip, Bot, User, Trash2, StopCircle } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { api, Message } from '@/lib/api';
 import { motion, AnimatePresence } from 'framer-motion';
+import { useNotification } from '@/context/NotificationContext';
 
 export function ChatInterface() {
   const [input, setInput] = useState('');
@@ -16,6 +17,8 @@ export function ChatInterface() {
     }
   }, [history, loading]);
 
+  const { showNotification } = useNotification();
+
   const handleSubmit = async (e?: React.FormEvent) => {
     e?.preventDefault();
     if (!input.trim() || loading) return;
@@ -26,17 +29,22 @@ export function ChatInterface() {
     setLoading(true);
 
     try {
-      // In a real streaming setup we'd use a stream, but for now we wait for full response
-      // mimicking the app.py behavior
       const response = await api.query(userMsg.content, history);
       
       const assistantMsg: Message = { 
         role: 'assistant', 
-        content: response.answer || "Sorry, I couldn't generate a response." 
+        content: response.answer || "Sorry, I couldn't generate a response.",
+        sources: response.sources
       };
       
       setHistory(prev => [...prev, assistantMsg]);
     } catch (err) {
+      console.error('Query error', err);
+      showNotification({
+        type: 'error',
+        title: 'Query Failed',
+        message: 'There was an issue connecting to the Albot engine. please check the backend status.'
+      });
       const errorMsg: Message = { role: 'assistant', content: `**Error**: ${err instanceof Error ? err.message : 'Unknown error'}` };
       setHistory(prev => [...prev, errorMsg]);
     } finally {
@@ -44,7 +52,15 @@ export function ChatInterface() {
     }
   };
 
-  const clearChat = () => setHistory([]);
+  const clearChat = () => {
+    showNotification({
+      type: 'confirm',
+      title: 'Clear Conversation',
+      message: 'Are you sure you want to clear the entire chat history? This cannot be undone.',
+      confirmText: 'Clear',
+      onConfirm: () => setHistory([])
+    });
+  };
 
   return (
     <div className="flex-1 flex flex-col h-full relative">
@@ -54,7 +70,7 @@ export function ChatInterface() {
              <div className="w-24 h-24 rounded-2xl bg-white/5 flex items-center justify-center shadow-[0_0_30px_rgba(147,51,234,0.1)]">
                 <Bot className="w-12 h-12 text-primary/50" />
              </div>
-             <p className="text-lg font-medium">How can I help you today?</p>
+             <p className="text-lg font-medium">Hello! I'm Albot. How can I assist you today?</p>
           </div>
         )}
         
@@ -73,8 +89,22 @@ export function ChatInterface() {
                   : 'bg-white/5 border border-white/5 text-neutral-200 rounded-bl-none'}
               `}>
                 {msg.role === 'assistant' ? (
-                  <div className="prose prose-invert prose-sm max-w-none">
-                    <ReactMarkdown>{msg.content}</ReactMarkdown>
+                  <div className="flex flex-col gap-3">
+                    <div className="prose prose-invert prose-sm max-w-none">
+                      <ReactMarkdown>{msg.content}</ReactMarkdown>
+                    </div>
+                    {msg.sources && msg.sources.length > 0 && (
+                      <div className="pt-3 border-t border-white/10 mt-1">
+                        <p className="text-[10px] uppercase tracking-wider font-bold text-neutral-500 mb-2">Sources</p>
+                        <div className="flex flex-wrap gap-2">
+                          {msg.sources.map((src, i) => (
+                            <span key={i} className="px-2 py-0.5 rounded-full bg-white/5 border border-white/10 text-[10px] text-neutral-400">
+                              {src}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ) : (
                   msg.content

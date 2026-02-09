@@ -10,7 +10,7 @@ from loguru import logger
 from backend.core.orchestrator import RAGOrchestrator
 
 
-app = FastAPI(title="Multimodal RAG API")
+app = FastAPI(title="Albot API")
 
 # CORS
 # CORS
@@ -52,7 +52,7 @@ class QueryRequest(BaseModel):
 
 class QueryResponse(BaseModel):
     answer: str
-    sources: Optional[List[str]] = None
+    sources: List[str] = []
 
 
 class APIKeyRequest(BaseModel):
@@ -62,9 +62,42 @@ class APIKeyRequest(BaseModel):
     model_name: Optional[str] = None
 
 
+class URLIngestRequest(BaseModel):
+    url: str
+
+
 @app.get("/health")
 async def health():
     return {"status": "healthy"}
+
+
+@app.get("/sources")
+async def list_sources():
+    """List all unique sources"""
+    try:
+        return rag_system.list_sources()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/sources/{source_name}")
+async def delete_source(source_name: str):
+    """Delete a document by source name"""
+    try:
+        rag_system.delete_document(source_name)
+        return {"status": "success"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/system/reset")
+async def reset_system():
+    """Clear entire knowledge base"""
+    try:
+        rag_system.reset_system()
+        return {"status": "success"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/ingest/file")
@@ -91,10 +124,14 @@ async def ingest_file(file: UploadFile = File(...)):
 
 
 @app.post("/ingest/url")
-async def ingest_url(url: str):
+async def ingest_url(request: URLIngestRequest):
     """Ingest URL content"""
-    # Implementation would use URL processor
-    return {"status": "not implemented"}
+    try:
+        result = rag_system.ingest_url(request.url)
+        return result
+    except Exception as e:
+        logger.error(f"URL Ingestion error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/query", response_model=QueryResponse)
@@ -109,9 +146,9 @@ async def query(request: QueryRequest):
             modalities = [Modality(m) for m in request.modalities]
         
         # Query
-        answer = rag_system.query(request.query, modalities)
+        result = rag_system.query(request.query, modalities)
         
-        return QueryResponse(answer=answer, sources=[])
+        return QueryResponse(answer=result['answer'], sources=result['sources'])
         
     except Exception as e:
         logger.error(f"Query error: {e}")
@@ -138,6 +175,16 @@ async def list_api_keys():
     """List all API keys"""
     try:
         return rag_system.get_api_keys()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api-keys/{provider}/{name}")
+async def delete_api_key(provider: str, name: str):
+    """Delete an API key"""
+    try:
+        rag_system.delete_api_key(provider, name)
+        return {"status": "success"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

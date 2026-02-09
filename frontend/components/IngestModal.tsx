@@ -3,6 +3,7 @@ import { X, Upload, FileUp, Link, Loader2, CheckCircle } from 'lucide-react';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { motion } from 'framer-motion';
+import { useNotification } from '@/context/NotificationContext';
 
 interface IngestModalProps {
   isOpen: boolean;
@@ -12,10 +13,13 @@ interface IngestModalProps {
 export function IngestModal({ isOpen, onClose }: IngestModalProps) {
   const [activeTab, setActiveTab] = useState<'file' | 'url'>('file');
   const [file, setFile] = useState<File | null>(null);
+  const [url, setUrl] = useState<string>('');
   const [status, setStatus] = useState<string>('');
   const [loading, setLoading] = useState(false);
 
   if (!isOpen) return null;
+
+  const { showNotification } = useNotification();
 
   const handleFileUpload = async () => {
     if (!file) return;
@@ -23,9 +27,47 @@ export function IngestModal({ isOpen, onClose }: IngestModalProps) {
     setStatus('Uploading and processing...');
     try {
       const res = await api.uploadFile(file);
-      setStatus(typeof res === 'string' ? res : JSON.stringify(res));
+      setStatus('');
+      showNotification({
+        type: 'success',
+        title: 'Ingestion Successful',
+        message: `"${file.name}" has been processed and added to the knowledge base.`
+      });
+      setFile(null);
     } catch (e) {
-      setStatus('Error uploading file');
+      console.error('Upload error', e);
+      setStatus('');
+      showNotification({
+        type: 'error',
+        title: 'Ingestion Failed',
+        message: `Failed to process "${file.name}". Please ensure it's a supported format and try again.`
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleUrlIngest = async () => {
+    if (!url.trim()) return;
+    setLoading(true);
+    setStatus('Ingesting data source...');
+    try {
+      await api.ingestUrl(url);
+      setStatus('');
+      showNotification({
+        type: 'success',
+        title: 'URL Ingested',
+        message: `The content from "${url}" has been added to the knowledge base.`
+      });
+      setUrl('');
+    } catch (e) {
+      console.error('URL ingest error', e);
+      setStatus('');
+      showNotification({
+        type: 'error',
+        title: 'Ingestion Failed',
+        message: `Failed to process "${url}". Please ensure it's a valid and accessible URL.`
+      });
     } finally {
       setLoading(false);
     }
@@ -40,9 +82,9 @@ export function IngestModal({ isOpen, onClose }: IngestModalProps) {
         className="w-full max-w-md bg-[#0a0a0a] border border-white/10 rounded-2xl shadow-2xl overflow-hidden"
       >
          <div className="p-4 border-b border-white/10 flex justify-between items-center bg-white/5">
-          <h2 className="font-semibold flex items-center gap-2">
+          <h2 className="font-semibold flex items-center gap-2 text-white">
             <Upload className="w-4 h-4 text-primary" />
-            Ingest Knowledge
+            Add to Knowledge Base
           </h2>
           <button onClick={onClose} className="p-1 hover:bg-white/10 rounded-lg transition-colors">
             <X className="w-4 h-4" />
@@ -78,13 +120,16 @@ export function IngestModal({ isOpen, onClose }: IngestModalProps) {
                   type="file" 
                   className="absolute inset-0 opacity-0 cursor-pointer"
                   onChange={(e) => setFile(e.target.files?.[0] || null)}
+                  accept=".pdf,.docx,.doc,.txt,.md,.json,.csv,.mp3,.wav,.m4a,.mp4,.avi,.mov"
                 />
                 <div className="w-12 h-12 rounded-full bg-white/5 flex items-center justify-center group-hover:scale-110 transition-transform">
                   <FileUp className="w-6 h-6 text-primary" />
                 </div>
                 <div className="text-center">
                   <p className="font-medium text-sm">{file ? file.name : "Click to select or drag file"}</p>
-                  <p className="text-xs text-neutral-500 mt-1">PDF, DOCX, TXT, MD</p>
+                  <p className="text-xs text-neutral-500 mt-1 uppercase tracking-tight font-semibold">
+                    PDF, DOCX, TXT, MD, JSON, CSV, Audio, Video
+                  </p>
                 </div>
               </div>
 
@@ -102,21 +147,25 @@ export function IngestModal({ isOpen, onClose }: IngestModalProps) {
                <div className="space-y-2">
                  <label className="text-xs font-medium text-neutral-400 uppercase">Data Source URL</label>
                  <div className="relative">
-                   <Link className="absolute left-3 top-3.5 w-4 h-4 text-neutral-500" />
-                   <input 
-                     type="url" 
-                     placeholder="https://example.com/guide"
-                     className="w-full bg-black/50 border border-white/10 rounded-xl pl-10 pr-4 py-3 text-sm focus:border-primary focus:ring-1 focus:ring-primary outline-none transition-all"
-                   />
-                 </div>
-               </div>
-               <button 
-                disabled
-                className="w-full bg-white/10 text-neutral-400 py-3 rounded-xl font-medium cursor-not-allowed flex items-center justify-center gap-2"
+                  <Link className="absolute left-3 top-3.5 w-4 h-4 text-neutral-500" />
+                  <input 
+                    type="url" 
+                    value={url}
+                    onChange={(e) => setUrl(e.target.value)}
+                    placeholder="https://example.com/guide"
+                    className="w-full bg-black/50 border border-white/10 rounded-xl pl-10 pr-4 py-3 text-sm focus:border-primary focus:ring-1 focus:ring-primary outline-none transition-all text-white"
+                  />
+                </div>
+              </div>
+              <button 
+                onClick={handleUrlIngest}
+                disabled={!url.trim() || loading}
+                className="w-full bg-primary hover:bg-primary-hover text-white py-3 rounded-xl font-medium transition-all shadow-lg shadow-purple-500/20 flex items-center justify-center gap-2 disabled:opacity-50"
               >
-                URL Ingestion Coming Soon
+                {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Link className="w-4 h-4" />}
+                Ingest URL
               </button>
-             </div>
+            </div>
           )}
 
           {status && (

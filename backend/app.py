@@ -1,5 +1,5 @@
 """
-Gradio Frontend for Multimodal RAG System
+Gradio Frontend for Albot System
 """
 import gradio as gr
 import requests
@@ -33,6 +33,36 @@ class RAGInterface:
         except Exception as e:
             return f"Error: {str(e)}"
     
+    def list_sources(self) -> List[str]:
+        """List all unique sources"""
+        try:
+            response = requests.get(f"{API_BASE}/sources")
+            if response.status_code == 200:
+                return response.json()
+            return []
+        except:
+            return []
+
+    def delete_source(self, source_name: str) -> str:
+        """Delete a document by source name"""
+        try:
+            response = requests.delete(f"{API_BASE}/sources/{source_name}")
+            if response.status_code == 200:
+                return f"✓ Deleted document: {source_name}"
+            return f"Error deleting document: {response.text}"
+        except Exception as e:
+            return f"Error: {str(e)}"
+
+    def reset_system(self) -> str:
+        """Reset the entire system"""
+        try:
+            response = requests.delete(f"{API_BASE}/system/reset")
+            if response.status_code == 200:
+                return "✓ System reset successfully (all data cleared)"
+            return f"Error resetting system: {response.text}"
+        except Exception as e:
+            return f"Error: {str(e)}"
+
     def query(self, question: str, history: List[Dict[str, str]]) -> Tuple:
         """Process query"""
         if not question.strip():
@@ -50,6 +80,9 @@ class RAGInterface:
             if response.status_code == 200:
                 result = response.json()
                 answer = result['answer']
+                sources = result.get('sources', [])
+                if sources:
+                    answer += "\n\n**References:**\n" + "\n".join([f"- {s}" for s in sources])
             else:
                 answer = f"Error: {response.text}"
             
@@ -138,9 +171,9 @@ interface = RAGInterface()
 
 
 # Build UI
-with gr.Blocks(title="Multimodal RAG System", theme=gr.themes.Soft()) as demo:
-    gr.Markdown("# 🧠 Multimodal RAG System")
-    gr.Markdown("Advanced retrieval with vector, graph, and hybrid search")
+with gr.Blocks(title="Albot", theme=gr.themes.Soft()) as demo:
+    gr.Markdown("#  Albot")
+    gr.Markdown("Your intelligent multimodal assistant")
     
     with gr.Tabs():
         # Chat Tab
@@ -154,7 +187,7 @@ with gr.Blocks(title="Multimodal RAG System", theme=gr.themes.Soft()) as demo:
                 )
                 submit = gr.Button("Send", scale=1)
             
-            clear = gr.Button("Clear")
+            clear = gr.Button("Clear Chat History")
             
             # Event handlers
             submit.click(
@@ -171,30 +204,48 @@ with gr.Blocks(title="Multimodal RAG System", theme=gr.themes.Soft()) as demo:
             
             clear.click(lambda: ([], ""), outputs=[chatbot, msg])
         
-        # Ingest Tab
-        with gr.Tab("📁 Ingest Data"):
-            gr.Markdown("### Upload Files")
-            gr.Markdown("Supported: PDF, DOCX, TXT, Images, Audio, Video, CSV, etc.")
-            
-            file_upload = gr.File(label="Select File")
-            upload_btn = gr.Button("Upload & Process", variant="primary")
-            upload_output = gr.Textbox(label="Status", lines=3)
-            
-            upload_btn.click(
-                interface.upload_file,
-                inputs=[file_upload],
-                outputs=[upload_output]
-            )
-            
-            gr.Markdown("### Ingest URL")
-            url_input = gr.Textbox(label="URL", placeholder="https://...")
-            url_btn = gr.Button("Ingest URL")
-            url_output = gr.Textbox(label="Status")
+        # Documents Tab
+        with gr.Tab("📁 Documents"):
+            with gr.Row():
+                with gr.Column():
+                    gr.Markdown("### Upload Files")
+                    file_upload = gr.File(label="Select File")
+                    upload_btn = gr.Button("Upload & Process", variant="primary")
+                    upload_output = gr.Textbox(label="Status", lines=3)
+                    
+                    upload_btn.click(
+                        interface.upload_file,
+                        inputs=[file_upload],
+                        outputs=[upload_output]
+                    )
+                
+                with gr.Column():
+                    gr.Markdown("### Loaded Documents")
+                    sources_list = gr.Dropdown(label="Select Document to Delete", choices=[])
+                    with gr.Row():
+                        refresh_sources = gr.Button("Refresh List")
+                        delete_btn = gr.Button("Delete Document", variant="stop")
+                    
+                    delete_output = gr.Textbox(label="Status")
+                    
+                    def update_sources():
+                        sources = interface.list_sources()
+                        return gr.Dropdown(choices=sources)
+
+                    refresh_sources.click(update_sources, outputs=[sources_list])
+                    delete_btn.click(interface.delete_source, inputs=[sources_list], outputs=[delete_output])
+
+            gr.Markdown("---")
+            gr.Markdown("### System Reset")
+            gr.Markdown("Warning: This will delete all indexed documents and conversation data.")
+            reset_btn = gr.Button("Reset Entire System", variant="stop")
+            reset_output = gr.Textbox(label="Status")
+            reset_btn.click(interface.reset_system, outputs=[reset_output])
+
             
         # API Keys Tab
         with gr.Tab("🔑 API Keys"):
             gr.Markdown("### Add LLM Provider API Keys")
-            gr.Markdown("Multiple keys per provider supported for automatic fallback")
             
             with gr.Row():
                 provider = gr.Dropdown(
@@ -214,30 +265,17 @@ with gr.Blocks(title="Multimodal RAG System", theme=gr.themes.Soft()) as demo:
                 inputs=[provider, key_name, api_key, model_name],
                 outputs=[key_output]
             )
-            
-            gr.Markdown("### Current Keys")
-            refresh_keys = gr.Button("Refresh")
-            keys_display = gr.Markdown()
         
         # Statistics Tab
         with gr.Tab("📊 Statistics"):
-            gr.Markdown("### System Performance")
-            
+            gr.Markdown("### Performance")
             refresh_stats = gr.Button("Refresh Statistics")
             stats_display = gr.Markdown()
-            
-            refresh_stats.click(
-                interface.get_stats,
-                outputs=[stats_display]
-            )
+            refresh_stats.click(interface.get_stats, outputs=[stats_display])
     
     # Footer
     gr.Markdown("---")
-    gr.Markdown(
-        "**Multimodal RAG System** | "
-        "Vector + Graph + BM25 Hybrid Retrieval | "
-        "Powered by ArangoDB, E5, CLIP, Whisper"
-    )
+    gr.Markdown("**Albot** | Intelligent Multimodal Chatbot")
 
 
 if __name__ == "__main__":

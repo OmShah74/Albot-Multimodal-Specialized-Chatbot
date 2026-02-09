@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Albot - Multimodal RAG",
-  description: "Advanced RAG Chatbot with Vector + Graph Search",
+  title: "Albot",
+  description: "Your intelligent multimodal assistant",
 };
 
 export default function RootLayout({

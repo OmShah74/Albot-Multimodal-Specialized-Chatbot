@@ -127,6 +127,7 @@ class RetrievalResult(BaseModel):
     struct_score: float = 0.0
     mod_score: float = 0.0
     context: List[str] = Field(default_factory=list)
+    source: Optional[str] = None
 
 
 class SearchConfig(BaseModel):

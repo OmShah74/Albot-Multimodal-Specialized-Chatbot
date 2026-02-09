@@ -443,7 +443,8 @@ class AdvancedRetrievalEngine:
                 graph_score=s_graph,
                 bm25_score=s_bm25,
                 struct_score=s_struct,
-                mod_score=s_mod
+                mod_score=s_mod,
+                source=node_data.get('source')
             )
             
             results.append(result)
