@@ -129,13 +129,19 @@ export function ChatInterface() {
               key={idx} 
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
-              className={`flex gap-4 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+              className={`flex gap-3 ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}
             >
+              <div className={cn(
+                "w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-1",
+                msg.role === 'user' ? "bg-primary/20 border border-primary/30" : "bg-white/5 border border-white/10"
+              )}>
+                {msg.role === 'user' ? <User className="w-4 h-4 text-primary" /> : <Bot className="w-4 h-4 text-primary" />}
+              </div>
               <div className={`
-                max-w-[80%] rounded-2xl px-5 py-3.5 text-sm leading-relaxed shadow-sm
+                max-w-[92%] rounded-2xl px-5 py-4 text-[15px] leading-relaxed shadow-lg transition-all
                 ${msg.role === 'user' 
-                  ? 'bg-primary text-white rounded-br-none' 
-                  : 'bg-white/5 border border-white/5 text-neutral-200 rounded-bl-none'}
+                  ? 'bg-primary text-white rounded-tr-none' 
+                  : 'bg-white/5 border border-white/10 text-neutral-200 rounded-tl-none'}
               `}>
                 {msg.role === 'assistant' ? (
                   <div className="flex flex-col gap-3">
@@ -180,12 +186,20 @@ export function ChatInterface() {
              <motion.div 
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
-              className="flex gap-4 justify-start"
+              className="flex gap-3 justify-start"
             >
-               <div className="bg-white/5 border border-white/5 rounded-2xl px-5 py-4 rounded-bl-none flex gap-1">
-                 <span className="w-2 h-2 rounded-full bg-primary/40 animate-bounce" style={{ animationDelay: '0s' }}></span>
-                 <span className="w-2 h-2 rounded-full bg-primary/40 animate-bounce" style={{ animationDelay: '0.2s' }}></span>
-                 <span className="w-2 h-2 rounded-full bg-primary/40 animate-bounce" style={{ animationDelay: '0.4s' }}></span>
+               <div className="w-8 h-8 rounded-lg bg-white/5 border border-white/10 flex items-center justify-center shrink-0 mt-1">
+                 <Bot className="w-4 h-4 text-primary animate-pulse" />
+               </div>
+               <div className="bg-white/5 border border-white/10 rounded-2xl px-5 py-4 rounded-tl-none flex flex-col gap-2 min-w-[200px]">
+                 <div className="flex gap-1.5">
+                   <span className="w-1.5 h-1.5 rounded-full bg-primary animate-bounce shadow-[0_0_8px_rgba(147,51,234,0.5)]" style={{ animationDelay: '0s' }}></span>
+                   <span className="w-1.5 h-1.5 rounded-full bg-primary animate-bounce shadow-[0_0_8px_rgba(147,51,234,0.5)]" style={{ animationDelay: '0.2s' }}></span>
+                   <span className="w-1.5 h-1.5 rounded-full bg-primary animate-bounce shadow-[0_0_8px_rgba(147,51,234,0.5)]" style={{ animationDelay: '0.4s' }}></span>
+                 </div>
+                 <p className="text-[10px] uppercase tracking-[0.2em] font-black text-neutral-500 animate-pulse">
+                    Thinking & Retrieving Evidence...
+                 </p>
                </div>
             </motion.div>
           )}
@@ -224,6 +238,23 @@ export function ChatInterface() {
                 </button>
               </div>
             </div>
+
+            {retrievalMode === 'advanced' && (
+              <button
+                type="button"
+                onClick={() => setShowAdvancedOptions(!showAdvancedOptions)}
+                className={cn(
+                  "flex items-center gap-2 px-3 py-1.5 rounded-lg text-[10px] uppercase tracking-widest font-black transition-all border",
+                  showAdvancedOptions 
+                    ? "bg-primary/20 border-primary/30 text-primary" 
+                    : "bg-white/5 border-white/10 text-neutral-500 hover:text-neutral-300 shadow-lg"
+                )}
+              >
+                <Settings2 className="w-3 h-3" />
+                {showAdvancedOptions ? "Hide Algos" : "Configure Algos"}
+                {showAdvancedOptions ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+              </button>
+            )}
           </div>
 
           {retrievalMode === 'advanced' && (
@@ -237,22 +268,28 @@ export function ChatInterface() {
                 >
                   <div className="bg-white/5 rounded-2xl border border-white/10 p-4 grid grid-cols-2 lg:grid-cols-6 gap-4">
                     {Object.entries(algorithms).map(([key, enabled]) => (
-                      <label key={key} className="flex items-center gap-2 cursor-pointer group">
+                      <div 
+                        key={key} 
+                        onClick={() => setAlgorithms(prev => ({ ...prev, [key]: !enabled }))}
+                        className="flex items-center gap-2 cursor-pointer group select-none"
+                      >
                         <div 
                           className={cn(
-                            "w-4 h-4 rounded border flex items-center justify-center transition-all",
+                            "w-4 h-4 rounded border flex items-center justify-center transition-all duration-200",
                             enabled 
-                              ? "bg-primary border-primary" 
+                              ? "bg-primary border-primary shadow-[0_0_8px_rgba(147,51,234,0.4)]" 
                               : "border-white/20 group-hover:border-white/40"
                           )}
-                          onClick={() => setAlgorithms(prev => ({ ...prev, [key]: !enabled }))}
                         >
-                          {enabled && <div className="w-2 h-2 bg-white rounded-full" />}
+                          {enabled && <div className="w-1.5 h-1.5 bg-white rounded-full" />}
                         </div>
-                        <span className="text-[10px] uppercase tracking-wider font-semibold text-neutral-500 group-hover:text-neutral-300">
+                        <span className={cn(
+                          "text-[10px] uppercase tracking-wider font-bold transition-colors",
+                          enabled ? "text-neutral-200" : "text-neutral-500 group-hover:text-neutral-400"
+                        )}>
                           {key.replace('use_', '').replace('_', ' ')}
                         </span>
-                      </label>
+                      </div>
                     ))}
                   </div>
                 </motion.div>
@@ -278,7 +315,7 @@ export function ChatInterface() {
           </button>
         </form>
         <p className="text-center text-[10px] text-neutral-600 uppercase tracking-widest font-medium">
-           Albot Multi-Modal Intelligence Engine v2.1
+           Albot Multi-Modal Intelligence Engine v1.0
         </p>
       </div>
 
@@ -384,7 +421,7 @@ export function ChatInterface() {
 
               <div className="p-6 bg-white/5 border-t border-white/5 text-center">
                  <p className="text-[10px] text-neutral-500 uppercase tracking-[0.3em] font-black">
-                   Advanced Retrieval Metrics System v2.2
+                   Advanced Retrieval Metrics System v1.0
                  </p>
               </div>
             </motion.div>

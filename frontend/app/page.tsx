@@ -13,6 +13,7 @@ export default function Home() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isIngestOpen, setIsIngestOpen] = useState(false);
   const [isApiKeyOpen, setIsApiKeyOpen] = useState(false);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
 
   return (
     <NotificationProvider>
@@ -23,6 +24,8 @@ export default function Home() {
         {/* Sidebar */}
         <div className="z-10 relative">
            <Sidebar 
+              isCollapsed={isSidebarCollapsed}
+              onToggle={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
               onOpenSettings={() => setIsSettingsOpen(true)}
               onOpenIngest={() => setIsIngestOpen(true)}
               onOpenApiKeys={() => setIsApiKeyOpen(true)}
