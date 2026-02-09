@@ -59,38 +59,93 @@ class AdvancedRetrievalEngine:
     def retrieve(
         self,
         query_decomposition: QueryDecomposition,
-        query_text: str
-    ) -> List[RetrievalResult]:
+        query_text: str,
+        config: Dict = None
+    ) -> tuple:
         """
-        Main retrieval pipeline implementing the mathematical framework
+        Main retrieval pipeline with configurable algorithms.
         
-        Pipeline:
-        1. Multi-channel retrieval (vector + graph + BM25)
-        2. Evidence accumulation scoring
-        3. Diversity-preserving re-ranking (MMR)
-        4. Multi-hop evidence packing
+        Returns: (results, metrics_dict)
+        
+        Config options:
+        - mode: "fast" (Vector+Graph) or "advanced" (all algorithms)
+        - use_vector, use_graph, use_bm25, use_pagerank, use_structural, use_mmr
         """
-        logger.info(f"Starting retrieval for query: {query_text[:100]}")
+        import time
+        
+        # Default config: Advanced mode with all algorithms
+        config = config or {
+            "mode": "advanced",
+            "use_vector": True,
+            "use_graph": True,
+            "use_bm25": True,
+            "use_pagerank": True,
+            "use_structural": True,
+            "use_mmr": True
+        }
+        
+        mode = config.get("mode", "advanced")
+        logger.info(f"Starting retrieval for query: {query_text[:100]} (mode={mode})")
+        
+        # Initialize metrics
+        metrics = {
+            "vector_time_ms": 0,
+            "graph_time_ms": 0,
+            "bm25_time_ms": 0,
+            "algorithms_used": []
+        }
         
         # Step 1: Query embedding
         query_embedding = self.vectorizer.embed_query(query_text)
         
-        # Step 2: Multi-channel retrieval
-        vector_candidates = self._vector_retrieval(
-            query_decomposition, 
-            query_embedding
-        )
+        # Step 2: Vector retrieval (always enabled)
+        vector_start = time.time()
+        vector_candidates = self._vector_retrieval(query_decomposition, query_embedding)
+        metrics["vector_time_ms"] = (time.time() - vector_start) * 1000
+        metrics["algorithms_used"].append("Vector Search")
         
-        graph_candidates = self._graph_retrieval(vector_candidates)
+        # Fast mode: Vector + Graph only (Graph uses default settings)
+        if mode == "fast":
+            graph_start = time.time()
+            graph_candidates = self._graph_retrieval(vector_candidates, use_pagerank=False)  # Fast RAG skips PageRank
+            metrics["graph_time_ms"] = (time.time() - graph_start) * 1000
+            metrics["algorithms_used"].append("Graph Traversal")
+            
+            # Merge and convert to results
+            all_cands = vector_candidates + graph_candidates
+            results = self._quick_convert_to_results(all_cands[:15])
+            
+            logger.info(f"Fast retrieval: {len(results)} results")
+            return results, metrics
         
-        bm25_candidates = self._bm25_retrieval(query_text)
+        # Advanced mode: Configurable algorithms
+        graph_candidates = []
+        bm25_candidates = []
+        use_pagerank = config.get("use_pagerank", True)
         
-        # Step 3: Compute structural importance
-        struct_scores = self._compute_structural_scores(
-            vector_candidates + graph_candidates + bm25_candidates
-        )
+        if config.get("use_graph", True):
+            graph_start = time.time()
+            graph_candidates = self._graph_retrieval(vector_candidates, use_pagerank=use_pagerank)
+            metrics["graph_time_ms"] = (time.time() - graph_start) * 1000
+            metrics["algorithms_used"].append("Graph Traversal")
+            if use_pagerank:
+                metrics["algorithms_used"].append("PageRank")
         
-        # Step 4: Unified Evidence Accumulation
+        if config.get("use_bm25", True):
+            bm25_start = time.time()
+            bm25_candidates = self._bm25_retrieval(query_text)
+            metrics["bm25_time_ms"] = (time.time() - bm25_start) * 1000
+            metrics["algorithms_used"].append("BM25")
+        
+        # Compute structural importance
+        struct_scores = {}
+        if config.get("use_structural", True):
+            struct_scores = self._compute_structural_scores(
+                vector_candidates + graph_candidates + bm25_candidates
+            )
+            metrics["algorithms_used"].append("Structural Scoring")
+        
+        # Unified Evidence Accumulation
         all_candidates = self._merge_candidates(
             vector_candidates,
             graph_candidates,
@@ -99,14 +154,38 @@ class AdvancedRetrievalEngine:
             query_decomposition
         )
         
-        # Step 5: Diversity-preserving re-ranking (Submodular optimization)
-        reranked = self._submodular_reranking(all_candidates, query_embedding)
+        # Diversity-preserving re-ranking (MMR)
+        if config.get("use_mmr", True):
+            reranked = self._submodular_reranking(all_candidates, query_embedding)
+            metrics["algorithms_used"].append("MMR Reranking")
+        else:
+            reranked = all_candidates[:20]
         
-        # Step 6: Multi-hop evidence packing
+        # Multi-hop evidence packing
         final_results = self._pack_evidence(reranked)
         
-        logger.info(f"Retrieved {len(final_results)} results")
-        return final_results
+        logger.info(f"Advanced retrieval: {len(final_results)} results, algos: {metrics['algorithms_used']}")
+        return final_results, metrics
+    
+    def _quick_convert_to_results(self, candidates: List[Dict]) -> List[RetrievalResult]:
+        """Quick conversion for fast mode - no heavy processing"""
+        results = []
+        for cand in candidates:
+            node_data = self.storage.get_node(cand['node_id'])
+            if node_data:
+                results.append(RetrievalResult(
+                    atom_id=cand['node_id'],
+                    content=node_data['content'],
+                    modality=Modality(node_data['modality']),
+                    score=cand.get('vector_score', cand.get('graph_score', 0.0)),
+                    vector_score=cand.get('vector_score', 0.0),
+                    graph_score=cand.get('graph_score', 0.0),
+                    bm25_score=0.0,
+                    struct_score=0.0,
+                    mod_score=1.0,
+                    source=node_data.get('source')
+                ))
+        return results
     
     def _vector_retrieval(
         self,
@@ -157,12 +236,9 @@ class AdvancedRetrievalEngine:
         
         return aggregated
     
-    def _graph_retrieval(self, seed_candidates: List[Dict]) -> List[Dict]:
+    def _graph_retrieval(self, seed_candidates: List[Dict], use_pagerank: bool = True) -> List[Dict]:
         """
-        Graph-based retrieval using Personalized PageRank
-        
-        Implements:
-        π_{t+1} = α·π_0 + (1-α)·A·π_t
+        Graph-based retrieval using optional Personalized PageRank
         """
         if not seed_candidates:
             return []
@@ -170,11 +246,13 @@ class AdvancedRetrievalEngine:
         # Extract seed nodes
         seed_nodes = [c['node_id'] for c in seed_candidates[:self.config.top_k_vector]]
         
-        # Compute personalized PageRank
-        pagerank_scores = self._personalized_pagerank(
-            seed_nodes,
-            alpha=self.config.pagerank_alpha
-        )
+        # Compute personalized PageRank if requested
+        pagerank_scores = {}
+        if use_pagerank:
+            pagerank_scores = self._personalized_pagerank(
+                seed_nodes,
+                alpha=self.config.pagerank_alpha
+            )
         
         # Graph traversal with hop constraint
         traversal_results = self.storage.graph_traversal(
@@ -195,7 +273,11 @@ class AdvancedRetrievalEngine:
             pr_score = pagerank_scores.get(node_id, 0.0)
             path_weight = result.get('path_weight', 0.0)
             
-            graph_score = 0.6 * pr_score + 0.4 * path_weight
+            # If no PageRank, rely entirely on path weight
+            if not use_pagerank:
+                graph_score = path_weight
+            else:
+                graph_score = 0.6 * pr_score + 0.4 * path_weight
             
             graph_candidates.append({
                 'node_id': node_id,

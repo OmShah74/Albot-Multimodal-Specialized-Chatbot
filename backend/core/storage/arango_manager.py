@@ -285,39 +285,50 @@ class ArangoStorageManager:
         self,
         start_nodes: List[str],
         max_depth: int = 2,
-        edge_types: Optional[List[EdgeType]] = None
+        edge_types: Optional[List[EdgeType]] = None,
+        limit: int = 100  # Add result limit for performance
     ) -> List[Dict]:
         """
-        Graph traversal from seed nodes
-        Returns list of reached nodes with distances
+        Optimized graph traversal from seed nodes.
+        Uses LIMIT and PRUNE for performance on dense graphs.
         """
         edge_filter = ""
         if edge_types:
             types_str = ", ".join([f"'{et.value}'" for et in edge_types])
-            edge_filter = f"FILTER edge.edge_type IN [{types_str}]"
+            edge_filter = f"FILTER e.edge_type IN [{types_str}]"
         
         # Convert start_nodes to full document IDs
-        start_docs = [f"{self.config.nodes_collection}/{nid}" for nid in start_nodes]
+        start_docs = [f"{self.config.nodes_collection}/{nid}" for nid in start_nodes[:10]]  # Limit seeds
         
+        # Optimized query with LIMIT and PRUNE
         query = f"""
-        FOR start IN @start_nodes
-            FOR v, e, p IN 1..@max_depth ANY start {self.config.edges_collection}
-                {edge_filter}
-                RETURN DISTINCT {{
-                    node_id: v._key,
-                    content: v.content,
-                    modality: v.modality,
-                    distance: LENGTH(p.edges),
-                    path_weight: SUM(FOR edge IN p.edges RETURN edge.weight)
-                }}
+        LET results = (
+            FOR start IN @start_nodes
+                FOR v, e, p IN 1..@max_depth ANY start {self.config.edges_collection}
+                    PRUNE LENGTH(p.edges) >= @max_depth
+                    {edge_filter}
+                    LIMIT @limit
+                    RETURN DISTINCT {{
+                        node_id: v._key,
+                        content: SUBSTRING(v.content, 0, 500),
+                        modality: v.modality,
+                        distance: LENGTH(p.edges),
+                        path_weight: SUM(FOR edge IN p.edges RETURN edge.weight)
+                    }}
+        )
+        FOR r IN results
+            LIMIT @limit
+            RETURN r
         """
         
         cursor = self.db.aql.execute(
             query,
             bind_vars={
                 'start_nodes': start_docs,
-                'max_depth': max_depth
-            }
+                'max_depth': min(max_depth, 2),  # Cap at 2 hops for safety
+                'limit': limit
+            },
+            ttl=30  # 30 second timeout
         )
         
         return list(cursor)

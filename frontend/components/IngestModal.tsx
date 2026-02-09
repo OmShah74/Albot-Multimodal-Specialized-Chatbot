@@ -16,31 +16,61 @@ export function IngestModal({ isOpen, onClose }: IngestModalProps) {
   const [url, setUrl] = useState<string>('');
   const [status, setStatus] = useState<string>('');
   const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState<{step: string; percent: number} | null>(null);
+
+  const { showNotification } = useNotification();
 
   if (!isOpen) return null;
 
-  const { showNotification } = useNotification();
 
   const handleFileUpload = async () => {
     if (!file) return;
     setLoading(true);
-    setStatus('Uploading and processing...');
+    setProgress({ step: 'Uploading file...', percent: 10 });
+    
     try {
+      // Simulate progress steps for better UX
+      const progressSteps = [
+        { step: 'Parsing document...', percent: 25 },
+        { step: 'Extracting content...', percent: 40 },
+        { step: 'Creating knowledge atoms...', percent: 60 },
+        { step: 'Building semantic graph...', percent: 80 },
+        { step: 'Finalizing...', percent: 95 },
+      ];
+      
+      // Start progress simulation (slowed to match backend)
+      let stepIdx = 0;
+      const progressInterval = setInterval(() => {
+        if (stepIdx < progressSteps.length) {
+          setProgress(progressSteps[stepIdx]);
+          stepIdx++;
+        }
+      }, 2500);  // Slower to match actual backend processing
+      
       const res = await api.uploadFile(file);
-      setStatus('');
-      showNotification({
-        type: 'success',
-        title: 'Ingestion Successful',
-        message: `"${file.name}" has been processed and added to the knowledge base.`
-      });
-      setFile(null);
+      
+      clearInterval(progressInterval);
+      setProgress({ step: 'Complete!', percent: 100 });
+      
+      setTimeout(() => {
+        setProgress(null);
+        setStatus('');
+        showNotification({
+          type: 'success',
+          title: 'Ingestion Successful',
+          message: `"${file.name}" added to knowledge base. ${res.atoms_count || 0} atoms, ${res.edges_count || 0} edges created.`
+        });
+        setFile(null);
+      }, 500);
+      
     } catch (e) {
       console.error('Upload error', e);
+      setProgress(null);
       setStatus('');
       showNotification({
         type: 'error',
         title: 'Ingestion Failed',
-        message: `Failed to process "${file.name}". Please ensure it's a supported format and try again.`
+        message: `Failed to process "${file.name}". Please ensure it's a supported format.`
       });
     } finally {
       setLoading(false);
@@ -168,7 +198,32 @@ export function IngestModal({ isOpen, onClose }: IngestModalProps) {
             </div>
           )}
 
-          {status && (
+          {/* Progress Tracker */}
+          {progress && (
+            <motion.div 
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="mt-4 p-4 bg-white/5 rounded-xl border border-white/10"
+            >
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm font-medium text-white flex items-center gap-2">
+                  <Loader2 className="w-4 h-4 animate-spin text-primary" />
+                  {progress.step}
+                </span>
+                <span className="text-xs text-neutral-400">{progress.percent}%</span>
+              </div>
+              <div className="h-2 bg-white/10 rounded-full overflow-hidden">
+                <motion.div 
+                  className="h-full bg-gradient-to-r from-purple-600 to-primary rounded-full"
+                  initial={{ width: 0 }}
+                  animate={{ width: `${progress.percent}%` }}
+                  transition={{ duration: 0.3, ease: "easeOut" }}
+                />
+              </div>
+            </motion.div>
+          )}
+
+          {status && !progress && (
             <div className="mt-4 p-3 bg-white/5 rounded-xl border border-white/10 text-sm text-neutral-300 flex items-start gap-3">
               <div className="shrink-0 mt-0.5">
                  {loading ? <Loader2 className="w-4 h-4 animate-spin text-primary" /> : <CheckCircle className="w-4 h-4 text-green-400" />}

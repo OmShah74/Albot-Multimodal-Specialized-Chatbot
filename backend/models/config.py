@@ -131,14 +131,14 @@ class RetrievalResult(BaseModel):
 
 
 class SearchConfig(BaseModel):
-    """Search configuration"""
-    top_k_vector: int = 5
-    top_k_graph: int = 5
-    top_k_bm25: int = 3
-    graph_hops: int = 2
+    """Search configuration - optimized for granular retrieval"""
+    top_k_vector: int = 10  # Reduced from 15 for performance
+    top_k_graph: int = 10   # Reduced from 15 for performance
+    top_k_bm25: int = 5     # Reduced from 10 for performance
+    graph_hops: int = 2     # Keep at 2 for dense graphs
     pagerank_alpha: float = 0.15
-    diversity_lambda: float = 0.3
-    confidence_threshold: float = 0.6
+    diversity_lambda: float = 0.25
+    confidence_threshold: float = 0.5
 
 
 class PerformanceMetrics(BaseModel):

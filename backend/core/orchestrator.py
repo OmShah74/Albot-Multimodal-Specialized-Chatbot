@@ -118,20 +118,15 @@ class RAGOrchestrator:
         if not atoms:
             return {'status': 'error', 'message': 'No content extracted'}
         
-        # Step 2: Vectorize atoms
-        for atom in atoms:
-            # Generate embedding based on modality
-            if atom.modality == Modality.TEXT:
-                embedding = self.vectorizer.embed_text([atom.content])[0]
-                atom.embeddings['default'] = embedding.tolist()
+        # Step 2: Vectorize atoms (BATCHED for performance)
+        text_atoms = [a for a in atoms if a.modality in [Modality.TEXT, Modality.AUDIO]]
+        
+        if text_atoms:
+            # Batch embed all text content at once
+            contents = [a.content[:2000] for a in text_atoms]  # Truncate for performance
+            embeddings = self.vectorizer.embed_text(contents)
             
-            elif atom.modality == Modality.IMAGE:
-                # Would need image data from metadata
-                pass
-            
-            elif atom.modality == Modality.AUDIO:
-                # Audio uses transcript embedding
-                embedding = self.vectorizer.embed_text([atom.content])[0]
+            for atom, embedding in zip(text_atoms, embeddings):
                 atom.embeddings['default'] = embedding.tolist()
         
         # Step 3: Store atoms
@@ -202,37 +197,74 @@ class RAGOrchestrator:
     def query(
         self,
         query_text: str,
-        query_modalities: Optional[List[Modality]] = None
+        query_modalities: Optional[List[Modality]] = None,
+        retrieval_config: Optional[Dict] = None
     ) -> Dict:
         """
-        Main query pipeline
+        Main query pipeline with configurable retrieval
         
-        Returns dict with answer and unique sources
+        Returns dict with answer, sources, and performance metrics
         """
+        import time
+        start_time = time.time()
+        
         if not query_text or not query_text.strip():
             logger.warning("Empty query received")
             return {
                 "answer": "Please provide a query.",
-                "sources": []
+                "sources": [],
+                "metrics": {"total_time_ms": 0, "mode": "none"}
             }
-            
-        logger.info(f"Processing query: {query_text}")
+        
+        # Default config: Advanced mode with all algorithms
+        config = retrieval_config or {
+            "mode": "advanced",
+            "use_vector": True,
+            "use_graph": True,
+            "use_bm25": True,
+            "use_pagerank": True,
+            "use_structural": True,
+            "use_mmr": True
+        }
+        
+        logger.info(f"Processing query: {query_text} (mode={config.get('mode', 'advanced')})")
         
         # Step 1: Query decomposition
         query_decomp = self._decompose_query(query_text, query_modalities)
         
-        # Step 2: Retrieval
-        results = self.retriever.retrieve(query_decomp, query_text)
+        # Step 2: Retrieval with config and timing
+        retrieval_start = time.time()
+        results, retrieval_metrics = self.retriever.retrieve(query_decomp, query_text, config)
+        retrieval_time = (time.time() - retrieval_start) * 1000
         
         # Step 3: Format evidence for LLM and extract unique sources
         evidence, sources = self._format_evidence(results)
         
-        # Step 4: LLM synthesis
+        # Step 4: LLM synthesis with timing
+        synthesis_start = time.time()
         answer = self._synthesize_answer(query_text, evidence)
+        synthesis_time = (time.time() - synthesis_start) * 1000
+        
+        total_time = (time.time() - start_time) * 1000
+        
+        # Build metrics
+        metrics = {
+            "total_time_ms": round(total_time, 1),
+            "vector_time_ms": round(retrieval_metrics.get("vector_time_ms", 0), 1),
+            "graph_time_ms": round(retrieval_metrics.get("graph_time_ms", 0), 1),
+            "bm25_time_ms": round(retrieval_metrics.get("bm25_time_ms", 0), 1),
+            "synthesis_time_ms": round(synthesis_time, 1),
+            "results_count": len(results),
+            "mode": config.get("mode", "advanced"),
+            "algorithms_used": retrieval_metrics.get("algorithms_used", [])
+        }
+        
+        logger.info(f"Query completed in {total_time:.0f}ms (retrieval: {retrieval_time:.0f}ms, synthesis: {synthesis_time:.0f}ms)")
         
         return {
             "answer": answer,
-            "sources": sources
+            "sources": sources,
+            "metrics": metrics
         }
 
     def _decompose_query(
@@ -284,16 +316,36 @@ class RAGOrchestrator:
     def _synthesize_answer(self, query: str, evidence: str) -> str:
         """Use LLM to synthesize final answer"""
         
-        system_prompt = """You are a helpful AI assistant. 
-        1. Use the provided evidence to answer the user's question accurately and concisely. Cite specific evidence when relevant.
-        2. If the evidence is not relevant or insufficient, use your own internal knowledge to answer the question helpfuly.
-        3. Prioritize evidence over internal knowledge if there is a conflict.
-        """
+        system_prompt = """You are the Albot Intelligence Specialist, an elite multi-modal reasoning engine.
+Your objective is to synthesize complex data into clear, expert-level insights while maintaining a professional and helpful persona.
+
+CRITICAL ARCHITECTURAL CONSTRAINTS:
+1. Grounding: You must only use the provided context. If information is missing, state this precisely and suggest what type of data would be needed to answer.
+2. Natural Synthesis: Do NOT use robotic citation markers like [1] or [2]. Instead, attribute information naturally if needed (e.g., "The documentation states...", "According to the PDF...").
+3. Structure: Use high-quality Markdown. Use bold headers for sections, bullet points for lists, and code blocks for technical parameters.
+4. Professionalism: Maintain a sophisticated, expert-level tone. Avoid fluff or filler.
+5. Multi-Modality: If the context includes different modalities (Audio, Image, PDF), synthesize them into a unified explanation showing how they relate (e.g., "The visual data confirms what is discussed in the audio segment...").
+
+INTELLECTUAL FRAMEWORK:
+- Analyze: Don't just repeat; connect the dots between different pieces of evidence.
+- Contextualize: Explain WHY the information matters in the context of the user's query.
+- Precision: Use exact numbers, dates, and technical terms found in the context.
+- Depth: Provide to the point, deep when needed explanations. Understand the user's query properly.
+- Do not give code to the user when not necessary, or when the user does not ask for it."""
+        
+        user_prompt = f"""Based on the following context, please answer the user's question.
+
+Context:
+{evidence}
+
+Question: {query}
+
+Provide a clear, deep and insightful technically grounded response according to the query given by the user and the context:"""
         
         messages = [
             {
                 "role": "user",
-                "content": f"Evidence:\n\n{evidence}\n\nQuestion: {query}\n\nProvide a comprehensive answer based on the evidence."
+                "content": user_prompt
             }
         ]
         
@@ -301,8 +353,8 @@ class RAGOrchestrator:
             response = self.llm_router.complete(
                 messages=messages,
                 system_prompt=system_prompt,
-                max_tokens=1000,
-                temperature=0.7
+                max_tokens=1300,
+                temperature=0.5
             )
             return response
         except Exception as e:

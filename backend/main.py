@@ -45,14 +45,40 @@ async def shutdown():
 
 
 # Request/Response models
+class RetrievalConfig(BaseModel):
+    """Configuration for retrieval algorithms"""
+    mode: str = "advanced"  # "fast" or "advanced"
+    use_vector: bool = True
+    use_graph: bool = True
+    use_bm25: bool = True
+    use_pagerank: bool = True
+    use_structural: bool = True
+    use_mmr: bool = True
+
+
 class QueryRequest(BaseModel):
     query: str
     modalities: Optional[List[str]] = None
+    retrieval_config: Optional[RetrievalConfig] = None
+
+
+class QueryMetrics(BaseModel):
+    """Query performance metrics"""
+    total_time_ms: float = 0
+    vector_time_ms: float = 0
+    graph_time_ms: float = 0
+    bm25_time_ms: float = 0
+    synthesis_time_ms: float = 0
+    results_count: int = 0
+    mode: str = "advanced"
+    algorithms_used: List[str] = []
 
 
 class QueryResponse(BaseModel):
     answer: str
     sources: List[str] = []
+    metrics: Optional[QueryMetrics] = None
+
 
 
 class APIKeyRequest(BaseModel):
@@ -136,7 +162,7 @@ async def ingest_url(request: URLIngestRequest):
 
 @app.post("/query", response_model=QueryResponse)
 async def query(request: QueryRequest):
-    """Process query"""
+    """Process query with configurable retrieval"""
     try:
         from backend.models.config import Modality
         
@@ -145,10 +171,24 @@ async def query(request: QueryRequest):
         if request.modalities:
             modalities = [Modality(m) for m in request.modalities]
         
-        # Query
-        result = rag_system.query(request.query, modalities)
+        # Build retrieval config dict
+        retrieval_config = None
+        if request.retrieval_config:
+            retrieval_config = request.retrieval_config.dict()
         
-        return QueryResponse(answer=result['answer'], sources=result['sources'])
+        # Query with config
+        result = rag_system.query(request.query, modalities, retrieval_config)
+        
+        # Build metrics if available
+        metrics = None
+        if 'metrics' in result:
+            metrics = QueryMetrics(**result['metrics'])
+        
+        return QueryResponse(
+            answer=result['answer'], 
+            sources=result['sources'],
+            metrics=metrics
+        )
         
     except Exception as e:
         logger.error(f"Query error: {e}")

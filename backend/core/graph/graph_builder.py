@@ -36,17 +36,17 @@ class GraphConstructionEngine:
             logger.warning("spaCy model not loaded, entity extraction disabled")
             self.nlp = None
         
-        # Similarity thresholds for different modalities
+        # Similarity thresholds for different modalities (lowered for denser graphs)
         self.similarity_thresholds = {
-            Modality.TEXT: 0.7,
-            Modality.IMAGE: 0.75,
-            Modality.AUDIO: 0.7,
-            Modality.VIDEO: 0.75,
-            Modality.TABLE: 0.7
+            Modality.TEXT: 0.5,
+            Modality.IMAGE: 0.55,
+            Modality.AUDIO: 0.5,
+            Modality.VIDEO: 0.55,
+            Modality.TABLE: 0.5
         }
         
-        # k for k-NN graph
-        self.k_neighbors = 5
+        # k for k-NN graph (increased for more connections)
+        self.k_neighbors = 10
         
         logger.info("Graph construction engine initialized")
     
@@ -303,7 +303,7 @@ class GraphConstructionEngine:
                 if len(union) > 0 and len(intersection) > 0:
                     jaccard = len(intersection) / len(union)
                     
-                    if jaccard > 0.1:  # Threshold
+                    if jaccard > 0.05:  # Lowered threshold for more entity connections
                         edges.append(GraphEdge(
                             source_id=id_i,
                             target_id=id_j,

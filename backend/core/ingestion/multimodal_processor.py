@@ -107,38 +107,110 @@ class MultimodalProcessor:
         return atoms
     
     def process_pdf(self, path: Path, source: str) -> List[KnowledgeAtom]:
-        """Process PDF with text extraction and OCR"""
+        """
+        Process PDF with granular multi-resolution extraction.
+        
+        Creates:
+        - FINE: Individual sentences (>20 chars)
+        - MID: Paragraphs and page sections
+        - COARSE: Full document summary
+        """
         atoms = []
         timestamp = time.time()
         
         try:
-            # Try pdfplumber first (better layout)
             with pdfplumber.open(path) as pdf:
                 full_text = ""
+                sentence_idx = 0
+                paragraph_idx = 0
+                
                 for page_num, page in enumerate(pdf.pages):
                     page_text = page.extract_text() or ""
                     full_text += page_text + "\n\n"
                     
-                    # Page-level atoms (MID resolution)
-                    if page_text.strip():
+                    if not page_text.strip():
+                        continue
+                    
+                    # --- FINE RESOLUTION: Sentences ---
+                    # Split by sentence-ending punctuation
+                    sentences = []
+                    for sent in page_text.replace('\n', ' ').split('.'):
+                        sent = sent.strip()
+                        if len(sent) > 20:  # Filter very short fragments
+                            sentences.append(sent + '.')
+                    
+                    for sent in sentences:
                         atoms.append(KnowledgeAtom(
-                            content=page_text,
+                            content=sent,
                             modality=Modality.TEXT,
-                            resolution=Resolution.MID,
+                            resolution=Resolution.FINE,
                             source=source,
-                            timestamp=timestamp + page_num,
-                            metadata={'page_num': page_num + 1}
+                            timestamp=timestamp + sentence_idx * 0.01,
+                            metadata={
+                                'page_num': page_num + 1,
+                                'sentence_idx': sentence_idx,
+                                'type': 'sentence'
+                            }
                         ))
+                        sentence_idx += 1
+                    
+                    # --- MID RESOLUTION: Paragraphs ---
+                    # Split by double newlines or significant whitespace
+                    paragraphs = [p.strip() for p in page_text.split('\n\n') if p.strip()]
+                    
+                    # If no double-newline paragraphs, try single newlines
+                    if len(paragraphs) <= 1:
+                        paragraphs = [p.strip() for p in page_text.split('\n') if len(p.strip()) > 50]
+                    
+                    for para in paragraphs:
+                        if len(para) > 50:  # Minimum paragraph length
+                            atoms.append(KnowledgeAtom(
+                                content=para,
+                                modality=Modality.TEXT,
+                                resolution=Resolution.MID,
+                                source=source,
+                                timestamp=timestamp + page_num + paragraph_idx * 0.1,
+                                metadata={
+                                    'page_num': page_num + 1,
+                                    'paragraph_idx': paragraph_idx,
+                                    'type': 'paragraph'
+                                }
+                            ))
+                            paragraph_idx += 1
+                    
+                    # --- MID RESOLUTION: Full Page ---
+                    atoms.append(KnowledgeAtom(
+                        content=page_text,
+                        modality=Modality.TEXT,
+                        resolution=Resolution.MID,
+                        source=source,
+                        timestamp=timestamp + page_num,
+                        metadata={
+                            'page_num': page_num + 1,
+                            'type': 'page'
+                        }
+                    ))
                 
-                # Document-level (COARSE)
-                atoms.append(KnowledgeAtom(
-                    content=full_text[:5000],
-                    modality=Modality.TEXT,
-                    resolution=Resolution.COARSE,
-                    source=source,
-                    timestamp=timestamp,
-                    metadata={'total_pages': len(pdf.pages)}
-                ))
+                # --- COARSE RESOLUTION: Document Summary ---
+                # Store multiple chunks if document is long
+                doc_chunks = [full_text[i:i+4000] for i in range(0, min(len(full_text), 20000), 4000)]
+                
+                for chunk_idx, chunk in enumerate(doc_chunks):
+                    atoms.append(KnowledgeAtom(
+                        content=chunk,
+                        modality=Modality.TEXT,
+                        resolution=Resolution.COARSE,
+                        source=source,
+                        timestamp=timestamp + chunk_idx * 0.001,
+                        metadata={
+                            'total_pages': len(pdf.pages),
+                            'chunk_idx': chunk_idx,
+                            'type': 'document_chunk'
+                        }
+                    ))
+                
+                logger.info(f"PDF '{source}': {sentence_idx} sentences, {paragraph_idx} paragraphs, {len(pdf.pages)} pages, {len(doc_chunks)} doc chunks")
+                
         except Exception as e:
             logger.error(f"PDF processing error: {e}")
         

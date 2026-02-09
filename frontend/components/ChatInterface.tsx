@@ -1,7 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send,  Paperclip, Bot, User, Trash2, StopCircle } from 'lucide-react';
+import { Send, Paperclip, Bot, User, Trash2, StopCircle, Zap, Settings2, Clock, ChevronDown, ChevronUp, Activity, X } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
-import { api, Message } from '@/lib/api';
+import { api, Message, RetrievalConfig, QueryMetrics } from '@/lib/api';
+import { cn } from '@/lib/utils';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNotification } from '@/context/NotificationContext';
 
@@ -10,6 +11,20 @@ export function ChatInterface() {
   const [history, setHistory] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  
+  // Retrieval mode state
+  const [retrievalMode, setRetrievalMode] = useState<'fast' | 'advanced'>('advanced');
+  const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
+  const [algorithms, setAlgorithms] = useState({
+    use_vector: true,
+    use_graph: true,
+    use_pagerank: true,
+    use_bm25: true,
+    use_structural: true,
+    use_mmr: true
+  });
+  const [lastMetrics, setLastMetrics] = useState<QueryMetrics | null>(null);
+  const [showMetricsOverlay, setShowMetricsOverlay] = useState(false);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -29,13 +44,25 @@ export function ChatInterface() {
     setLoading(true);
 
     try {
-      const response = await api.query(userMsg.content, history);
+      // Build config for API
+      const config: RetrievalConfig = {
+        mode: retrievalMode,
+        ...(retrievalMode === 'advanced' ? algorithms : {})
+      };
+
+      const response = await api.query(userMsg.content, history, config);
       
       const assistantMsg: Message = { 
         role: 'assistant', 
         content: response.answer || "Sorry, I couldn't generate a response.",
-        sources: response.sources
+        sources: response.sources,
+        metrics: response.metrics
       };
+      
+      if (response.metrics) {
+        setLastMetrics(response.metrics);
+        // Show overlay briefly for new queries if desired, or just let user click icon
+      }
       
       setHistory(prev => [...prev, assistantMsg]);
     } catch (err) {
@@ -64,6 +91,28 @@ export function ChatInterface() {
 
   return (
     <div className="flex-1 flex flex-col h-full relative">
+      <div className="absolute top-4 right-8 z-20 flex gap-2">
+        {history.some(m => m.metrics) && (
+          <button 
+            type="button" 
+            onClick={() => setShowMetricsOverlay(true)}
+            className="px-3 py-1.5 bg-white/5 hover:bg-primary/10 text-neutral-400 hover:text-primary rounded-lg transition-all border border-white/5 text-[10px] uppercase tracking-widest font-bold flex items-center gap-2 group/btn backdrop-blur-md"
+          >
+            <Activity className="w-3.5 h-3.5" />
+          </button>
+        )}
+        {history.length > 0 && (
+          <button 
+            type="button" 
+            onClick={clearChat}
+            className="px-3 py-1.5 bg-white/5 hover:bg-red-500/10 text-neutral-400 hover:text-red-400 rounded-lg transition-all border border-white/5 text-[10px] uppercase tracking-widest font-bold flex items-center gap-2 group/btn backdrop-blur-md"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            Clear Chat
+          </button>
+        )}
+      </div>
+
       <div className="flex-1 overflow-y-auto p-4 md:p-8 space-y-6" ref={scrollRef}>
         {history.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-neutral-500 space-y-4">
@@ -105,9 +154,23 @@ export function ChatInterface() {
                         </div>
                       </div>
                     )}
+                    {msg.metrics && (
+                      <div className="pt-2 flex justify-end">
+                        <button 
+                          onClick={() => {
+                            setLastMetrics(msg.metrics || null);
+                            setShowMetricsOverlay(true);
+                          }}
+                          className="text-[9px] uppercase tracking-widest font-bold text-primary hover:bg-primary/10 transition-colors flex items-center gap-1 bg-primary/5 px-2 py-1 rounded-lg border border-primary/10"
+                        >
+                          <Zap className="w-2.5 h-2.5" />
+                          Technical Report
+                        </button>
+                      </div>
+                    )}
                   </div>
                 ) : (
-                  msg.content
+                  <ReactMarkdown>{msg.content}</ReactMarkdown>
                 )}
               </div>
             </motion.div>
@@ -129,40 +192,205 @@ export function ChatInterface() {
         </AnimatePresence>
       </div>
 
-      <div className="p-4 md:p-6 w-full max-w-4xl mx-auto">
+      <div className="p-4 md:p-6 w-full max-w-4xl mx-auto space-y-4">
+        {/* RAG Mode & Metrics Panel */}
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center justify-between px-2">
+            <div className="flex items-center gap-4">
+              <div className="flex bg-white/5 p-1 rounded-xl border border-white/10">
+                <button
+                  onClick={() => setRetrievalMode('fast')}
+                  className={cn(
+                    "flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-all",
+                    retrievalMode === 'fast' 
+                      ? "bg-primary text-white shadow-lg shadow-primary/20" 
+                      : "text-neutral-400 hover:text-neutral-200"
+                  )}
+                >
+                  <Zap className="w-3.5 h-3.5" />
+                  Fast RAG
+                </button>
+                <button
+                  onClick={() => setRetrievalMode('advanced')}
+                  className={cn(
+                    "flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-all",
+                    retrievalMode === 'advanced' 
+                      ? "bg-primary text-white shadow-lg shadow-primary/20" 
+                      : "text-neutral-400 hover:text-neutral-200"
+                  )}
+                >
+                  <Settings2 className="w-3.5 h-3.5" />
+                  Advanced RAG
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {retrievalMode === 'advanced' && (
+            <AnimatePresence>
+              {showAdvancedOptions && (
+                <motion.div 
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                  exit={{ opacity: 0, height: 0 }}
+                  className="overflow-hidden mt-2"
+                >
+                  <div className="bg-white/5 rounded-2xl border border-white/10 p-4 grid grid-cols-2 lg:grid-cols-6 gap-4">
+                    {Object.entries(algorithms).map(([key, enabled]) => (
+                      <label key={key} className="flex items-center gap-2 cursor-pointer group">
+                        <div 
+                          className={cn(
+                            "w-4 h-4 rounded border flex items-center justify-center transition-all",
+                            enabled 
+                              ? "bg-primary border-primary" 
+                              : "border-white/20 group-hover:border-white/40"
+                          )}
+                          onClick={() => setAlgorithms(prev => ({ ...prev, [key]: !enabled }))}
+                        >
+                          {enabled && <div className="w-2 h-2 bg-white rounded-full" />}
+                        </div>
+                        <span className="text-[10px] uppercase tracking-wider font-semibold text-neutral-500 group-hover:text-neutral-300">
+                          {key.replace('use_', '').replace('_', ' ')}
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          )}
+        </div>
+
         <form onSubmit={handleSubmit} className="relative group">
           <input
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="Send a message..."
-            className="w-full input-glass rounded-2xl py-4 pl-5 pr-14 text-sm focus:outline-none transition-all placeholder:text-neutral-500 text-white"
+            placeholder={`Ask Albot anything... (${retrievalMode} RAG enabled)`}
+            className="w-full input-glass rounded-2xl py-4 pl-5 pr-14 text-sm focus:outline-none transition-all placeholder:text-neutral-500 text-white shadow-2xl"
           />
           <button 
             type="submit"
             disabled={!input.trim() || loading}
-            className="absolute right-2 top-2 p-2 bg-white/10 hover:bg-primary text-white rounded-xl transition-colors disabled:opacity-50 disabled:hover:bg-white/10"
+            className="absolute right-2 top-2 p-2 bg-white/10 hover:bg-primary text-white rounded-xl transition-colors disabled:opacity-50 disabled:hover:bg-white/10 group-hover:scale-105 active:scale-95 duration-200"
           >
              {loading ? <StopCircle className="w-5 h-5 animate-pulse" /> : <Send className="w-5 h-5" />}
           </button>
-          
-          <div className="absolute left-0 -top-12 flex gap-2">
-            {history.length > 0 && (
-                <button 
-                  type="button" 
-                  onClick={clearChat}
-                  className="p-2 bg-white/5 hover:bg-red-500/20 text-neutral-400 hover:text-red-400 rounded-xl transition-colors border border-white/5"
-                  title="Clear Chat"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
-            )}
-           </div>
         </form>
-        <p className="text-center text-xs text-neutral-600 mt-2">
-           AI can make mistakes. Please verify important information.
+        <p className="text-center text-[10px] text-neutral-600 uppercase tracking-widest font-medium">
+           Albot Multi-Modal Intelligence Engine v2.1
         </p>
       </div>
+
+      {/* Analytics Overlay */}
+      <AnimatePresence>
+        {showMetricsOverlay && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 md:p-8 backdrop-blur-xl bg-black/40"
+          >
+            <motion.div 
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="w-full max-w-5xl bg-[#0a0a0a] border border-white/10 rounded-3xl overflow-hidden shadow-[0_0_100px_rgba(147,51,234,0.15)] flex flex-col max-h-[90vh]"
+            >
+              <div className="p-6 border-b border-white/5 flex justify-between items-center bg-white/5">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-primary/20 flex items-center justify-center border border-primary/30">
+                    <Activity className="w-5 h-5 text-primary" />
+                  </div>
+                  <div>
+                    <h2 className="text-lg font-bold text-white tracking-tight uppercase">Technical Intelligence Report</h2>
+                    <p className="text-[10px] text-neutral-500 uppercase tracking-widest font-bold">Deep Retrieval Analytics</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setShowMetricsOverlay(false)}
+                  className="p-2 hover:bg-white/5 rounded-xl transition-colors text-neutral-400"
+                >
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-6 space-y-8">
+                 {lastMetrics ? (
+                   <section className="space-y-4">
+                      <div className="flex items-center gap-2 px-1">
+                        <Zap className="w-4 h-4 text-primary" />
+                        <h3 className="text-xs font-black uppercase tracking-[0.2em] text-neutral-400">Current Turn Analysis</h3>
+                      </div>
+                      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                        {[
+                          { label: 'Vector Search', value: lastMetrics.vector_time_ms, color: 'text-white' },
+                          { label: 'Graph Traversal', value: lastMetrics.graph_time_ms, color: 'text-white' },
+                          { label: 'BM25 / Algos', value: lastMetrics.bm25_time_ms, color: 'text-white' },
+                          { label: 'AI Synthesis', value: lastMetrics.synthesis_time_ms, color: 'text-primary' }
+                        ].map((stat, i) => (
+                          <div key={i} className="bg-white/5 p-4 rounded-2xl border border-white/5 flex flex-col gap-1">
+                            <span className="text-[9px] uppercase tracking-widest text-neutral-500 font-black">{stat.label}</span>
+                            <span className={cn("text-xl font-bold tracking-tight", stat.color)}>{stat.value.toFixed(1)}<span className="text-xs ml-0.5 opacity-50">ms</span></span>
+                          </div>
+                        ))}
+                      </div>
+                   </section>
+                 ) : (
+                   <div className="flex flex-col items-center justify-center h-48 text-neutral-500 gap-4">
+                      <Activity className="w-12 h-12 opacity-20" />
+                      <p className="text-sm font-bold uppercase tracking-widest">No metrics recorded yet</p>
+                   </div>
+                 )}
+
+                 {history.filter(m => m.role === 'assistant' && m.metrics).length > 0 && (
+                   <section className="space-y-4">
+                      <div className="flex items-center gap-2 px-1">
+                        <Clock className="w-4 h-4 text-neutral-500" />
+                        <h3 className="text-xs font-black uppercase tracking-[0.2em] text-neutral-400">Conversation History</h3>
+                      </div>
+                      <div className="space-y-2">
+                         {history.filter(m => m.role === 'assistant' && m.metrics).map((m, i) => (
+                           <div 
+                            key={i} 
+                            className={cn(
+                              "flex items-center justify-between p-4 rounded-2xl border transition-all cursor-pointer group",
+                              m.metrics === lastMetrics 
+                                ? "bg-primary/10 border-primary/30" 
+                                : "bg-white/5 border-white/5 hover:border-white/10"
+                            )}
+                            onClick={() => setLastMetrics(m.metrics || null)}
+                           >
+                              <div className="flex items-center gap-4">
+                                <span className="w-8 h-8 rounded-lg bg-white/5 flex items-center justify-center text-[10px] font-black text-neutral-500 border border-white/10 group-hover:text-white transition-colors">T{i+1}</span>
+                                <div className="flex flex-col">
+                                  <span className="text-sm font-bold text-neutral-200">{m.metrics?.total_time_ms.toFixed(0)}ms Total</span>
+                                  <span className="text-[9px] uppercase tracking-widest text-neutral-500 font-bold">{m.content.slice(0, 80).replace(/\*\*/g, '')}...</span>
+                                </div>
+                              </div>
+                              <div className="flex gap-4">
+                                 <div className="text-right flex flex-col">
+                                   <span className="text-[9px] uppercase tracking-widest text-neutral-600 font-black">Mode</span>
+                                   <span className="text-[10px] font-bold text-primary">{m.metrics?.mode}</span>
+                                 </div>
+                                 <Zap className={cn("w-4 h-4 mt-1 transition-colors", m.metrics === lastMetrics ? "text-primary" : "text-neutral-700")} />
+                              </div>
+                           </div>
+                         ))}
+                      </div>
+                   </section>
+                 )}
+              </div>
+
+              <div className="p-6 bg-white/5 border-t border-white/5 text-center">
+                 <p className="text-[10px] text-neutral-500 uppercase tracking-[0.3em] font-black">
+                   Advanced Retrieval Metrics System v2.2
+                 </p>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
