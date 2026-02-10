@@ -5,8 +5,7 @@ python-multipart
 pydantic
 pydantic-settings
 
-# Gradio Frontend
-gradio
+
 
 # Database - ArangoDB
 python-arango

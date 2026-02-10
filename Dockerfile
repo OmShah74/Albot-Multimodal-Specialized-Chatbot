@@ -34,17 +34,14 @@ COPY . .
 RUN mkdir -p /app/data/uploads /app/data/database /app/data/cache /app/data/models
 
 # Expose ports
-EXPOSE 7860 8000
+EXPOSE 8010
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
-ENV GRADIO_SERVER_NAME=0.0.0.0
-ENV GRADIO_SERVER_PORT=7860
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+    CMD curl -f http://localhost:8010/health || exit 1
 
-# Start both FastAPI and Gradio
 # Start FastAPI
-CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8010"]

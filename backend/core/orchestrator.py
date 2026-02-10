@@ -18,6 +18,7 @@ from backend.core.graph.graph_builder import GraphConstructionEngine
 from backend.core.retrieval.retrieval_engine import AdvancedRetrievalEngine
 from backend.core.llm.llm_router import LLMRouter
 from backend.core.ingestion.multimodal_processor import MultimodalProcessor
+from backend.core.web_search.web_search_engine import WebSearchEngine
 
 
 class RAGOrchestrator:
@@ -69,6 +70,9 @@ class RAGOrchestrator:
         
         # Ingestion
         self.processor = MultimodalProcessor()
+        
+        # Web Search
+        self.web_search = WebSearchEngine()
         
         # Load persistent API keys
         self._load_persistent_keys()
@@ -194,7 +198,7 @@ class RAGOrchestrator:
             'edges_count': len(edges)
         }
     
-    def query(
+    async def query(
         self,
         query_text: str,
         query_modalities: Optional[List[Modality]] = None,
@@ -240,9 +244,80 @@ class RAGOrchestrator:
         # Step 3: Format evidence for LLM and extract unique sources
         evidence, sources = self._format_evidence(results)
         
+        # Step 3.5: Context sufficiency check → Web search fallback
+        web_search_used = False
+        web_search_metrics = {}
+        
+        if not self._is_context_sufficient(results, evidence, query_text):
+            logger.info("Local context insufficient - triggering web search")
+            try:
+                web_results, web_metrics = await self.web_search.search(query_text, top_k=10)
+                web_search_metrics = web_metrics
+                
+                if web_results:
+                    web_search_used = True
+                    web_evidence = self.web_search.format_for_llm(web_results)
+                    web_sources = [r.url for r in web_results if r.url]
+                    
+                    # Merge: local evidence + web evidence
+                    if evidence and evidence.strip():
+                        combined_evidence = (
+                            f"=== LOCAL KNOWLEDGE BASE ===\n{evidence}\n\n"
+                            f"=== WEB SEARCH RESULTS ===\n{web_evidence}"
+                        )
+                    else:
+                        combined_evidence = web_evidence
+                    
+                    evidence = combined_evidence
+                    sources = list(set(sources + web_sources))
+                    
+                    logger.info(f"Web search added {len(web_results)} results")
+                else:
+                    logger.warning("Web search returned 0 results.")
+                    
+                    # GUARDRAIL: If web search failed and local context is invalid, abort.
+                    if not evidence or len(evidence.strip()) < 200:
+                        logger.warning("Aborting synthesis due to total retrieval failure.")
+                        
+                        failure_metrics = {
+                            "total_time_ms": round((time.time() - start_time) * 1000, 1),
+                            "mode": config.get("mode", "advanced"),
+                            "web_search_used": True,
+                            "web_search_time_ms": round(web_metrics.get("web_search_time_ms", 0), 1),
+                            "status": "failed_retrieval"
+                        }
+                        
+                        return {
+                            "answer": "I apologize, but I couldn't retrieve reliable information from the web at this time due to a search provider failure. Please try again later.",
+                            "sources": [],
+                            "metrics": failure_metrics
+                        }
+
+            except Exception as e:
+                logger.error(f"Web search failed: {e}")
+                # Fallback guardrail for crashes
+                if not evidence or len(evidence.strip()) < 200:
+                     return {
+                        "answer": "I encountered an error while searching the web and have no local information on this topic.",
+                        "sources": [],
+                        "metrics": {"total_time_ms": round((time.time() - start_time) * 1000, 1), "error": str(e)}
+                    }
+        
         # Step 4: LLM synthesis with timing
         synthesis_start = time.time()
-        answer = self._synthesize_answer(query_text, evidence)
+        
+        # GUARDRAIL: Final check before synthesis
+        if not evidence or len(evidence.strip()) < 100:
+             return {
+                "answer": "I have no information available to answer this query.",
+                "sources": [],
+                "metrics": {"total_time_ms": round((time.time() - start_time) * 1000, 1), "status": "no_context"}
+            }
+
+        if web_search_used:
+            answer = self._synthesize_with_web_context(query_text, evidence)
+        else:
+            answer = self._synthesize_answer(query_text, evidence)
         synthesis_time = (time.time() - synthesis_start) * 1000
         
         total_time = (time.time() - start_time) * 1000
@@ -256,10 +331,13 @@ class RAGOrchestrator:
             "synthesis_time_ms": round(synthesis_time, 1),
             "results_count": len(results),
             "mode": config.get("mode", "advanced"),
-            "algorithms_used": retrieval_metrics.get("algorithms_used", [])
+            "algorithms_used": retrieval_metrics.get("algorithms_used", []),
+            "web_search_used": web_search_used,
+            "web_search_time_ms": round(web_search_metrics.get("web_search_time_ms", 0), 1),
+            "web_providers_used": web_search_metrics.get("provider_breakdown", {})
         }
         
-        logger.info(f"Query completed in {total_time:.0f}ms (retrieval: {retrieval_time:.0f}ms, synthesis: {synthesis_time:.0f}ms)")
+        logger.info(f"Query completed in {total_time:.0f}ms (retrieval: {retrieval_time:.0f}ms, synthesis: {synthesis_time:.0f}ms, web_search: {web_search_used})")
         
         return {
             "answer": answer,
@@ -357,6 +435,98 @@ Provide a clear, deep and insightful technically grounded response according to 
                 temperature=0.5
             )
             return response
+        except Exception as e:
+            logger.error(f"LLM synthesis failed: {e}")
+            return f"Error generating response: {str(e)}"
+
+    def _is_context_sufficient(self, results, evidence: str, query: str = "") -> bool:
+        """
+        Check if local retrieval results are sufficient to answer the query.
+        """
+        # Criteria 1: No results
+        if not results:
+            return False
+            
+        # Criteria 2: Very short evidence (Critical check)
+        if len(evidence.strip()) < 100:
+             logger.info(f"Context insufficient: Evidence length {len(evidence.strip())} < 100")
+             return False
+            
+        # Criteria 3: Entity Mismatch Check
+        # If query has proper nouns (Entities) that are NOT in evidence, fail.
+        # Simple heuristic: Capitalized words (ignoring start), >3 chars.
+        if query:
+            import re
+            # Extract potential entities (capitalized words in middle of sentence or known entities)
+            # Simplification: just check if substantial unique words in query appear in evidence
+            query_words = set(re.findall(r'\b[A-Z][a-z]{2,}\b', query))
+            if query_words:
+                evidence_lower = evidence.lower()
+                missing_entities = [w for w in query_words if w.lower() not in evidence_lower]
+                if len(missing_entities) > 0 and len(missing_entities) == len(query_words):
+                     logger.info(f"Context insufficient: Missing key entities {missing_entities}")
+                     return False
+
+        # Criteria 4: Low relevance score
+        # Assuming normalized scores 0-1
+        max_score = max((r.score for r in results), default=0.0)
+        if max_score < 0.70:  # RAISED Threshold from 0.60
+            logger.info(f"Context insufficient: Max score {max_score:.2f} < 0.70")
+            return False
+            
+        return True
+
+    def _synthesize_with_web_context(self, query: str, evidence: str) -> str:
+        """Synthesize answer using web search context."""
+        
+        system_prompt = """You are Albot, an advanced AI assistant with real-time web access.
+Your goal is to provide a comprehensive, accurate answer by synthesizing the provided web search results.
+
+CITATION & ATTRIBUTION RULES:
+1. Natural Citation: Attribute information to its source naturally within the sentence.
+   - Good: "According to a recent TechCrunch article..."
+   - Good: "Wikipedia states that..."
+   - Bad: "The sky is blue [1]."
+2. Prioritize Authority: Give more weight to reputable sources (official docs, news outlets, encyclopedias).
+3. Conflict Resolution: If sources disagree, explicitly state the conflict (e.g., "While Source A suggests X, Source B argues Y").
+4. Synthesis: Do not just list results. Combine them into a coherent narrative.
+
+RESPONSE FORMAT:
+- Use Markdown for structure (headers, bolding for key terms).
+- If the query is about code or technical topics, provide code snippets if available in the context.
+- Be concise but thorough.
+
+REASONING GUIDELINES:
+1. Analyze the search results for reliability and relevance.
+2. Synthesize conflicting information by noting the discrepancy.
+3. If information is missing, state it clearly.
+4. Construct the answer logically, starting with a direct answer and then expanding with details.
+"""
+
+        user_prompt = f"""Based on the real-time web search results below, please answer the user's question.
+
+Context:
+{evidence}
+
+Question: {query}
+
+Provide a comprehensive, well-cited response:"""
+
+        messages = [
+            {"role": "user", "content": user_prompt}
+        ]
+
+        try:
+            response = self.llm_router.complete(
+                messages=messages,
+                system_prompt=system_prompt,
+                max_tokens=1500,
+                temperature=0.6  # Slightly higher for creative synthesis of web results
+            )
+            return response
+        except Exception as e:
+            logger.error(f"Web synthesis failed: {e}")
+            return f"Error generating response: {str(e)}"
         except Exception as e:
             logger.error(f"LLM synthesis failed: {e}")
             return f"Error generating response: {str(e)}"

@@ -19,8 +19,8 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",
         "http://127.0.0.1:3000",
-        "http://localhost:8000",
-        "http://127.0.0.1:8000",
+        "http://localhost:8010",
+        "http://127.0.0.1:8010",
         "*" # Keep wildcard for now but credential issue might persist if * is used with credentials
     ],
     allow_credentials=True,
@@ -177,7 +177,7 @@ async def query(request: QueryRequest):
             retrieval_config = request.retrieval_config.dict()
         
         # Query with config
-        result = rag_system.query(request.query, modalities, retrieval_config)
+        result = await rag_system.query(request.query, modalities, retrieval_config)
         
         # Build metrics if available
         metrics = None
@@ -240,4 +240,4 @@ async def get_statistics():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8010)

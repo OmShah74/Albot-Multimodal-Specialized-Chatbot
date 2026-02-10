@@ -19,11 +19,11 @@ services:
   backend:
     build: .
     container_name: multimodal-rag-backend
-    command: uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
+    command: uvicorn backend.main:app --host 0.0.0.0 --port 8010 --reload
     depends_on:
       - arangodb
     ports:
-      - "8000:8000"
+      - "8010:8010"
     volumes:
       - ./data:/app/data
       - ./config:/app/config
@@ -36,6 +36,7 @@ services:
       - ARANGO_USERNAME=root
       - ARANGO_PASSWORD=rootpassword
       - ARANGO_DATABASE=multimodal_rag
+      - HF_TOKEN=${HF_TOKEN}
     restart: unless-stopped
     networks:
       - rag-network
@@ -51,7 +52,7 @@ services:
       - /app/node_modules
       - /app/.next
     environment:
-      - NEXT_PUBLIC_API_URL=http://127.0.0.1:8000
+      - NEXT_PUBLIC_API_URL=http://127.0.0.1:8010
     depends_on:
       - backend
     restart: unless-stopped

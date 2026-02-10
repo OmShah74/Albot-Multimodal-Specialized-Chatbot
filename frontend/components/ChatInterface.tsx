@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Paperclip, Bot, User, Trash2, StopCircle, Zap, Settings2, Clock, ChevronDown, ChevronUp, Activity, X } from 'lucide-react';
+import { Send, Paperclip, Bot, User, Trash2, StopCircle, Zap, Settings2, Clock, ChevronDown, ChevronUp, Activity, X, Globe } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { api, Message, RetrievalConfig, QueryMetrics } from '@/lib/api';
 import { cn } from '@/lib/utils';
@@ -153,7 +153,8 @@ export function ChatInterface() {
                         <p className="text-[10px] uppercase tracking-wider font-bold text-neutral-500 mb-2">Sources</p>
                         <div className="flex flex-wrap gap-2">
                           {msg.sources.map((src, i) => (
-                            <span key={i} className="px-2 py-0.5 rounded-full bg-white/5 border border-white/10 text-[10px] text-neutral-400">
+                            <span key={i} className="px-2 py-0.5 rounded-full bg-white/5 border border-white/10 text-[10px] text-neutral-400 flex items-center gap-1">
+                              {src.startsWith('http') ? <Globe className="w-2.5 h-2.5" /> : null}
                               {src}
                             </span>
                           ))}
@@ -372,6 +373,28 @@ export function ChatInterface() {
                           </div>
                         ))}
                       </div>
+                      
+                      {lastMetrics.web_search_used && (
+                        <div className="mt-4 grid grid-cols-2 lg:grid-cols-4 gap-4">
+                           <div className="bg-white/5 p-4 rounded-2xl border border-white/5 flex flex-col gap-1">
+                             <span className="text-[9px] uppercase tracking-widest text-neutral-500 font-black">Web Search</span>
+                             <span className="text-xl font-bold tracking-tight text-white flex items-center gap-1">
+                                <Globe className="w-4 h-4 text-primary" />
+                                {lastMetrics.web_search_time_ms?.toFixed(1)}<span className="text-xs ml-0.5 opacity-50">ms</span>
+                             </span>
+                           </div>
+                           <div className="bg-white/5 p-4 rounded-2xl border border-white/5 flex flex-col gap-1 lg:col-span-3">
+                             <span className="text-[9px] uppercase tracking-widest text-neutral-500 font-black">Providers Consulted</span>
+                             <div className="flex flex-wrap gap-2 mt-1">
+                                {Object.entries(lastMetrics.web_providers_used || {}).map(([key, count]) => (
+                                  <span key={key} className="bg-white/10 px-2 py-1 rounded-lg text-[10px] font-bold text-neutral-300 border border-white/10">
+                                    {key}: {count} results
+                                  </span>
+                                ))}
+                             </div>
+                           </div>
+                        </div>
+                      )}
                    </section>
                  ) : (
                    <div className="flex flex-col items-center justify-center h-48 text-neutral-500 gap-4">
