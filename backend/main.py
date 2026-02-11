@@ -238,6 +238,31 @@ async def get_statistics():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/history")
+async def get_history():
+    """Get chat history"""
+    try:
+        if not rag_system:
+            return []
+        return rag_system.get_chat_history()
+    except Exception as e:
+        logger.error(f"Failed to get history: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/history")
+async def clear_history():
+    """Clear chat history"""
+    try:
+        if rag_system:
+            rag_system.clear_chat_history()
+        return {"status": "success"}
+    except Exception as e:
+        logger.error(f"Failed to clear history: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8010)

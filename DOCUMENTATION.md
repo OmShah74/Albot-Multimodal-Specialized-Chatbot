@@ -91,17 +91,21 @@ This is a **production-ready** implementation of the advanced multimodal RAG sys
 ### ✅ All Specified Algorithms
 
 1. **Resolution-Aware Vector Similarity**
+
    ```
    s̃_ij^vec = λ(r_i) · cos(q_j, e_i)
    ```
+
    - λ weights: fine=1.0, mid=0.85, coarse=0.65
    - Cosine similarity
    - Multi-modality support
 
 2. **Personalized PageRank**
+
    ```
    π_{t+1} = α·π_0 + (1-α)·A·π_t
    ```
+
    - Teleport vector (seed nodes)
    - Iterative convergence
    - Convergence detection
@@ -112,42 +116,52 @@ This is a **production-ready** implementation of the advanced multimodal RAG sys
    - Term frequency weighting
 
 4. **Structural Importance**
+
    ```
    s_i^struct = η_1·C_d(v_i) + η_2·C_b(v_i)
    ```
+
    - NetworkX for centrality
    - Degree centrality
    - Betweenness centrality
 
 5. **Unified Evidence Accumulation (WEA)**
+
    ```
    S_i = α·s_i^vec + β·s_i^graph + γ·s_i^bm25 + δ·s_i^struct + ε·s_i^mod
    ```
+
    - All five components
    - Normalized weights (sum to 1)
    - Modality alignment
 
 6. **Maximal Marginal Relevance (MMR)**
+
    ```
    max_A [Σ_{i∈A} S_i - λ Σ_{i,j∈A} cos(e_i, e_j)]
    ```
+
    - Greedy selection
    - Diversity penalty
    - Configurable λ
 
 7. **Bayesian Weight Optimization**
+
    ```
    max_θ E[M | θ]
    ```
+
    - Thompson Sampling
    - Performance metrics tracking
    - Adaptive updates
 
 8. **Edge Weight Normalization**
+
    ```
    ŵ_ij = (w_ij - μ) / σ
    w̃_ij = σ(ŵ_ij)
    ```
+
    - Z-score normalization
    - Sigmoid squashing
    - Per-type normalization
@@ -201,13 +215,22 @@ multimodal-rag-system/
 │   │   │   └── retrieval_engine.py
 │   │   ├── llm/
 │   │   │   └── llm_router.py
+│   │   ├── web_search/
+│   │   │   └── search_manager.py
 │   │   └── orchestrator.py
 │   ├── models/
 │   │   └── config.py
 │   ├── utils/
 │   └── main.py (FastAPI)
 ├── frontend/
-│   └── app.py (Gradio)
+│   ├── app/
+│   ├── components/
+│   │   ├── ChatInterface.tsx
+│   │   ├── Sidebar.tsx
+│   │   └── ...
+│   ├── lib/
+│   │   └── api.ts
+│   └── public/
 ├── data/
 │   ├── uploads/
 │   ├── database/
@@ -227,6 +250,7 @@ multimodal-rag-system/
 ## 🎯 Key Features Delivered
 
 ### Multimodal Support
+
 - ✅ Text (.txt, .md)
 - ✅ PDF (.pdf)
 - ✅ Images (.jpg, .png)
@@ -237,6 +261,7 @@ multimodal-rag-system/
 - ⚠️ YouTube (stub - needs yt-dlp)
 
 ### Advanced Retrieval
+
 - ✅ Multi-channel (Vector + Graph + BM25)
 - ✅ Personalized PageRank
 - ✅ k-NN graphs
@@ -246,6 +271,7 @@ multimodal-rag-system/
 - ✅ Adaptive weights
 
 ### LLM Integration
+
 - ✅ Multi-provider (5 providers)
 - ✅ Multi-key per provider
 - ✅ Automatic fallback
@@ -253,13 +279,23 @@ multimodal-rag-system/
 - ✅ Context overflow handling
 
 ### Database
+
 - ✅ ArangoDB (vector + graph)
 - ✅ Native graph operations
 - ✅ Vector similarity
 - ✅ Full-text search
 - ✅ Batch operations
+- ✅ Persistent Chat History
+
+### User Experience
+
+- ✅ Persistent Conversations
+- ✅ Integrated Web Search
+- ✅ "Clear Chat" Functionality
+- ✅ Real-time Token Streaming
 
 ### Deployment
+
 - ✅ Docker containers
 - ✅ docker-compose orchestration
 - ✅ Volume mounting (local data)
@@ -296,18 +332,41 @@ docker run -d -p 8529:8529 \
 python backend/main.py &
 
 # Start frontend
-python frontend/app.py
+# (Next.js - see frontend/README.md)
+npm run dev
 ```
+
+### ⚠️ Critical Note on Persistence
+
+If you encounter issues with chat history not saving or loading, the database state might be inconsistent from previous matching.
+**Reset the database volumes:**
+
+```bash
+docker-compose down -v
+docker-compose up --build
+```
+
+# Start backend
+
+python backend/main.py &
+
+# Start frontend
+
+python frontend/app.py
+
+````
 
 ---
 
 ## ⚙️ Configuration
 
 ### Database Config
+
 - Edit `backend/models/config.py`
 - Or set environment variables in `.env`
 
 ### Retrieval Weights
+
 ```python
 class RetrievalWeights:
     alpha: float = 0.3   # Vector
@@ -315,9 +374,10 @@ class RetrievalWeights:
     gamma: float = 0.2   # BM25
     delta: float = 0.15  # Structural
     epsilon: float = 0.1 # Modality
-```
+````
 
 ### Search Config
+
 ```python
 class SearchConfig:
     top_k_vector: int = 20
@@ -333,6 +393,7 @@ class SearchConfig:
 ## 🧪 Testing
 
 ### Test Ingestion
+
 ```python
 from backend.core.orchestrator import RAGOrchestrator
 
@@ -342,12 +403,14 @@ print(result)  # Shows atoms and edges created
 ```
 
 ### Test Query
+
 ```python
 answer = rag.query("What is the main topic?")
 print(answer)
 ```
 
 ### Test Components
+
 ```bash
 # Each component has unit tests (create if needed)
 python -m pytest tests/
@@ -375,6 +438,7 @@ python -m pytest tests/
 ## 🎓 Usage Examples
 
 ### Example 1: Research Papers
+
 ```python
 # Ingest 10 papers
 for paper in papers:
@@ -386,6 +450,7 @@ rag.query("Compare results from paper A and B")
 ```
 
 ### Example 2: Video Lectures
+
 ```python
 # Ingest video
 rag.ingest_file("lecture.mp4")
@@ -414,6 +479,7 @@ rag.query("At what timestamp is concept X explained?")
 ## 📝 Notes
 
 ### What's Production-Ready
+
 - ✅ Core retrieval algorithms
 - ✅ Database operations
 - ✅ LLM routing
@@ -421,12 +487,14 @@ rag.query("At what timestamp is concept X explained?")
 - ✅ Docker deployment
 
 ### What Needs Polish
+
 - ⚠️ Error handling (could be more robust)
 - ⚠️ Logging (could be more detailed)
 - ⚠️ Testing (unit tests needed)
 - ⚠️ UI styling (functional but basic)
 
 ### Known Limitations
+
 - Large files (>100MB) may need chunking
 - Real-time updates not implemented
 - No user authentication
@@ -466,6 +534,7 @@ rag.query("At what timestamp is concept X explained?")
 This is a **complete, working implementation** of your advanced multimodal RAG system.
 
 **All components are functional:**
+
 - ✅ Multimodal ingestion
 - ✅ Vector + graph storage
 - ✅ All 8 retrieval algorithms
@@ -474,12 +543,14 @@ This is a **complete, working implementation** of your advanced multimodal RAG s
 - ✅ User interface
 
 **Ready to:**
+
 - Deploy with one command
 - Ingest any supported file type
 - Query with advanced retrieval
 - Scale to your needs
 
 **Next steps:**
+
 1. Review code
 2. Deploy locally
 3. Test with your data

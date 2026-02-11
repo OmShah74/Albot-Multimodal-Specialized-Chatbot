@@ -27,6 +27,21 @@ export function ChatInterface() {
   const [showMetricsOverlay, setShowMetricsOverlay] = useState(false);
 
   useEffect(() => {
+    // Load history on mount
+    const loadHistory = async () => {
+      try {
+        const savedHistory = await api.getHistory();
+        if (savedHistory && savedHistory.length > 0) {
+          setHistory(savedHistory);
+        }
+      } catch (err) {
+        console.error('Failed to load history:', err);
+      }
+    };
+    loadHistory();
+  }, []);
+
+  useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
@@ -50,6 +65,12 @@ export function ChatInterface() {
         ...(retrievalMode === 'advanced' ? algorithms : {})
       };
 
+      // Pass empty history to API since backend now manages it, 
+      // OR pass full history for context if backend needs it immediate.
+      // Current backend implementation uses context from DB if I implement memory there?
+      // Actually, current backend just takes query. The Orchestrator doesn't accept "history" param in query() method yet.
+      // So passing history here is symbolic for now unless I update backend to use it.
+      // But query pipeline saves to history.
       const response = await api.query(userMsg.content, history, config);
       
       const assistantMsg: Message = { 
@@ -61,7 +82,6 @@ export function ChatInterface() {
       
       if (response.metrics) {
         setLastMetrics(response.metrics);
-        // Show overlay briefly for new queries if desired, or just let user click icon
       }
       
       setHistory(prev => [...prev, assistantMsg]);
@@ -85,7 +105,24 @@ export function ChatInterface() {
       title: 'Clear Conversation',
       message: 'Are you sure you want to clear the entire chat history? This cannot be undone.',
       confirmText: 'Clear',
-      onConfirm: () => setHistory([])
+      onConfirm: async () => {
+        try {
+          await api.clearHistory();
+          setHistory([]);
+          showNotification({
+            type: 'success',
+            title: 'History Cleared',
+            message: 'Conversation history has been reset.'
+          });
+        } catch (err) {
+           console.error('Failed to clear history:', err);
+           showNotification({
+            type: 'error',
+            title: 'Error',
+            message: 'Failed to clear history on backend.'
+          });
+        }
+      }
     });
   };
 

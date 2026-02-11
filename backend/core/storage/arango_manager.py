@@ -26,6 +26,7 @@ class ArangoStorageManager:
         self.graph: Optional[Graph] = None
         self.nodes_collection: Optional[StandardCollection] = None
         self.edges_collection: Optional[StandardCollection] = None
+        self.history_collection: Optional[StandardCollection] = None
         
     def connect(self):
         """Establish connection to ArangoDB"""
@@ -91,6 +92,13 @@ class ArangoStorageManager:
             logger.info("Created collection: system_config")
         else:
             self.system_config = self.db.collection("system_config")
+            
+        # Conversation history collection
+        if not self.db.has_collection("conversation_history"):
+            self.history_collection = self.db.create_collection("conversation_history")
+            logger.info("Created collection: conversation_history")
+        else:
+            self.history_collection = self.db.collection("conversation_history")
     
     def _initialize_graph(self):
         """Create graph if it doesn't exist"""
@@ -558,3 +566,76 @@ class ArangoStorageManager:
         if self.client:
             self.client.close()
             logger.info("Closed ArangoDB connection")
+
+    # --- Conversation History Methods ---
+
+    def save_chat_message(self, role: str, content: str, sources: List[str] = None, metrics: Dict = None):
+        """Save a chat message to history"""
+        from datetime import datetime
+        try:
+            # Ensure collection exists before saving
+            if not self.history_collection:
+                logger.warning("History collection not initialized. Attempting to initialize...")
+                self._initialize_collections()
+                
+            if not self.history_collection:
+                logger.error("Failed to initialize history collection. Message will not be saved.")
+                return
+
+            # Deep sanitize metrics for ArangoDB (handle numpy/non-serializables)
+            def sanitize(obj):
+                if isinstance(obj, dict):
+                    return {str(k): sanitize(v) for k, v in obj.items()}
+                elif isinstance(obj, list):
+                    return [sanitize(i) for i in obj]
+                elif hasattr(obj, 'item'): # Handle numpy types
+                    return obj.item()
+                return obj
+
+            clean_metrics = sanitize(metrics) if metrics else {}
+
+            doc = {
+                "role": role,
+                "content": content,
+                "timestamp": datetime.utcnow().isoformat(),
+                "sources": sources or [],
+                "metrics": clean_metrics
+            }
+            
+            self.history_collection.insert(doc)
+            logger.info(f"Successfully persistence saved {role} message to ArangoDB")
+            
+        except Exception as e:
+            logger.error(f"FATAL: Failed to save chat message to ArangoDB: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+
+    def get_chat_history(self, limit: int = 100) -> List[Dict]:
+        """Get recent chat history (ordered by timestamp ASC)"""
+        try:
+            # Return oldest to newest for chat UI
+            query = """
+            FOR doc IN conversation_history
+                SORT doc.timestamp ASC
+                RETURN {
+                    role: doc.role,
+                    content: doc.content,
+                    timestamp: doc.timestamp,
+                    sources: doc.sources,
+                    metrics: doc.metrics
+                }
+            """
+            cursor = self.db.aql.execute(query)
+            # No limit in AQL to get full history, but we could add if needed
+            return list(cursor)
+        except Exception as e:
+            logger.error(f"Failed to get chat history: {e}")
+            return []
+
+    def clear_chat_history(self):
+        """Clear entire chat history"""
+        try:
+            self.history_collection.truncate()
+            logger.info("Chat history cleared")
+        except Exception as e:
+            logger.error(f"Failed to clear chat history: {e}")
