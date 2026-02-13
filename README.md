@@ -32,21 +32,25 @@
 ## 🌟 Features
 
 ### 🧠 Core Intelligence
+
 - **Multimodal Ingestion**: Seamlessly process Text (.txt, .pdf), Images (OCR + VLM), Audio (Whisper), Video (Frame extraction + Transcription), and Structured Data (CSV/Excel).
 - **Hybrid Retrieval Engine**: Combines **Vector Similarity** (Semantic), **Graph Traversal** (Relational), and **BM25** (Lexical) for exhaustive search coverage.
 - **Adaptive Reasoning**: Implements **Personalized PageRank (PPR)** and **Bayesian Weight Optimization** to dynamically adjust retrieval strategies based on query complexity.
 - **Multi-LLM Routing**: Smart router supports OpenAI, Anthropic, Gemini, Groq, and OpenRouter with automatic fallback and rate limit handling.
 
 ### 💾 Memory & Persistence
+
 - **Unified Knowledge Graph**: Stores entities and relationships in ArangoDB, linking cross-modal concepts (e.g., linking a video frame to a text paragraph).
-- **Persistent Conversation History**: Chat history is reliably stored in ArangoDB, ensuring context is preserved across page reloads and browser sessions.
+- **Persistent Conversation History**: Chat history is reliably stored in **SQLite**, ensuring context is preserved across page reloads and browser sessions.
 - **"Clear Chat" Functionality**: User-controlled session management to reset context when needed.
 
 ### 🌐 Connectivity
+
 - **Integrated Web Search**: Falls back to live web search (DuckDuckGo) for real-time information retrieval when internal knowledge is insufficient.
 - **Real-time Streaming**: Token-by-token streaming responses for a responsive user experience.
 
 ### 🛡️ Deployment
+
 - **Docker-First Architecture**: Fully containerized backend and database for consistent deployment.
 - **Zero-Infrastructure Cost**: Designed to run locally or on commodity hardware using user-provided API keys.
 
@@ -61,13 +65,13 @@ graph TD
     User[User / Frontend] -->|Query| API[FastAPI Backend]
     API --> Router{LLM Router}
     API --> Retriever[Retrieval Engine]
-    
+
     subgraph "Knowledge Core"
         Ingestion[Multimodal Processor] -->|Atoms| GraphBuilder
         GraphBuilder -->|Edges & Nodes| DB[(ArangoDB)]
         DB <-->|Vector + Graph| Retriever
     end
-    
+
     subgraph "External Services"
         Router --> OpenAI
         Router --> Anthropic
@@ -81,25 +85,28 @@ graph TD
 ## 💻 Tech Stack
 
 ### Backend
-| Component | Technology | Description |
-|-----------|------------|-------------|
-| **Framework** | FastAPI | High-performance async API |
-| **Database** | ArangoDB | Multi-model (Graph + Document + Search) |
-| **Vector Search** | PyTorch + Transformers | E5-Large embeddings |
-| **Graph Algorithms** | NetworkX | Centrality, PageRank, Community Detection |
-| **Audio/Video** | Whisper, MoviePy | SOTA transcription and media processing |
-| **Web Search** | DuckDuckGo | Private, non-tracking web search |
-| **Task Queue** | AsyncIO | Non-blocking concurrency |
+
+| Component            | Technology             | Description                                     |
+| -------------------- | ---------------------- | ----------------------------------------------- |
+| **Framework**        | FastAPI                | High-performance async API                      |
+| **Database**         | ArangoDB               | Multi-model (Graph + Document + Search)         |
+| **Chat Storage**     | SQLite                 | Lightweight, file-based persistence for history |
+| **Vector Search**    | PyTorch + Transformers | E5-Large embeddings                             |
+| **Graph Algorithms** | NetworkX               | Centrality, PageRank, Community Detection       |
+| **Audio/Video**      | Whisper, MoviePy       | SOTA transcription and media processing         |
+| **Web Search**       | DuckDuckGo             | Private, non-tracking web search                |
+| **Task Queue**       | AsyncIO                | Non-blocking concurrency                        |
 
 ### Frontend
-| Component | Technology | Description |
-|-----------|------------|-------------|
-| **Framework** | Next.js 16 | React framework for production |
-| **UI Library** | React 19 | Latest React features |
-| **Styling** | Tailwind CSS 4 | Utility-first CSS |
-| **Icons** | Lucide React | Clean, consistent iconography |
-| **HTTP Client** | Axios | Robust data fetching |
-| **Animations** | Framer Motion | Smooth UI transitions |
+
+| Component       | Technology     | Description                    |
+| --------------- | -------------- | ------------------------------ |
+| **Framework**   | Next.js 16     | React framework for production |
+| **UI Library**  | React 19       | Latest React features          |
+| **Styling**     | Tailwind CSS 4 | Utility-first CSS              |
+| **Icons**       | Lucide React   | Clean, consistent iconography  |
+| **HTTP Client** | Axios          | Robust data fetching           |
+| **Animations**  | Framer Motion  | Smooth UI transitions          |
 
 ---
 
@@ -121,16 +128,19 @@ Before you begin, ensure you have the following installed:
 The easiest way to get the system running is via Docker Compose.
 
 1.  **Clone the repository**
+
     ```bash
     git clone https://github.com/yourusername/multimodal-rag-system.git
     cd multimodal-rag-system
     ```
 
 2.  **Start the services**
+
     ```bash
     docker-compose up -d --build
     ```
-    *This will start ArangoDB on port 8529 and the Backend API on port 8010.*
+
+    _This will start ArangoDB on port 8529 and the Backend API on port 8010._
 
 3.  **Start the Frontend** (If not included in docker-compose)
     ```bash
@@ -138,17 +148,20 @@ The easiest way to get the system running is via Docker Compose.
     npm install
     npm run dev
     ```
-    *The frontend will be available at `http://localhost:3000`.*
+    _The frontend will be available at `http://localhost:3000`._
 
 ### Manual Setup
 
 #### 1. Database (ArangoDB)
+
 Run ArangoDB using Docker:
+
 ```bash
 docker run -d -p 8529:8529 -e ARANGO_ROOT_PASSWORD=rootpassword --name arangodb arangodb:latest
 ```
 
 #### 2. Backend
+
 ```bash
 cd backend
 python -m venv venv
@@ -159,6 +172,7 @@ python main.py
 ```
 
 #### 3. Frontend
+
 ```bash
 cd frontend
 npm install
@@ -184,7 +198,7 @@ LOG_LEVEL=INFO
 UPLOAD_DIR=./data/uploads
 ```
 
-*Note: API Keys for LLMs (OpenAI, Gemini, etc.) are managed via the Frontend UI for security and are stored locally in the browser/session.*
+_Note: API Keys for LLMs (OpenAI, Gemini, etc.) are managed via the Frontend UI for security and are stored locally in the browser/session._
 
 ---
 
@@ -247,14 +261,17 @@ multimodal-rag-system/
 ## 🔧 Troubleshooting
 
 ### Persistence Issues
+
 If chat history is not saving or loading correctly, the database state might be inconsistent from previous versions.
 **Fix**: Reset the Docker volumes to initialize the correct schema.
+
 ```bash
 docker-compose down -v
 docker-compose up --build
 ```
 
 ### Installation Errors
+
 - **"Module not found"**: Ensure you have activated the virtual environment before running the backend.
 - **"Connection Refused"**: Check if ArangoDB is running on port 8529.
 

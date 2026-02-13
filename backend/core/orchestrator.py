@@ -13,6 +13,7 @@ from backend.models.config import (
     Modality
 )
 from backend.core.storage.arango_manager import ArangoStorageManager
+from backend.core.storage.sqlite_manager import SQLiteStorageManager # Added SQLite
 from backend.core.vectorization.embedding_engine import VectorizationEngine
 from backend.core.graph.graph_builder import GraphConstructionEngine
 from backend.core.retrieval.retrieval_engine import AdvancedRetrievalEngine
@@ -53,6 +54,9 @@ class RAGOrchestrator:
         except Exception as e:
             logger.critical(f"Failed to connect storage manager: {e}")
             # Raise or handle gracefully? For now log Critical.
+        
+        # Chat History Storage (SQLite)
+        self.chat_storage = SQLiteStorageManager()
         
         # Vectorization
         self.vectorizer = VectorizationEngine()
@@ -236,8 +240,8 @@ class RAGOrchestrator:
             "use_mmr": True
         }
         
-        # Save User Message to History
-        self.storage.save_chat_message(role="user", content=query_text)
+        # Save User Message to History (SQLite)
+        self.chat_storage.save_chat_message(role="user", content=query_text)
 
         logger.info(f"Processing query: {query_text} (mode={config.get('mode', 'advanced')})")
         
@@ -347,8 +351,8 @@ class RAGOrchestrator:
         
         logger.info(f"Query completed in {total_time:.0f}ms (retrieval: {retrieval_time:.0f}ms, synthesis: {synthesis_time:.0f}ms, web_search: {web_search_used})")
         
-        # Save Assistant Message to History
-        self.storage.save_chat_message(
+        # Save Assistant Message to History (SQLite)
+        self.chat_storage.save_chat_message(
             role="assistant", 
             content=answer, 
             sources=sources,
@@ -723,12 +727,12 @@ Provide a comprehensive response that weaves information from multiple sources i
         logger.info("System reset triggered")
 
     def get_chat_history(self, limit: int = 100) -> List[Dict]:
-        """Get chat history"""
-        return self.storage.get_chat_history(limit)
+        """Get chat history from SQLite"""
+        return self.chat_storage.get_chat_history(limit)
     
     def clear_chat_history(self):
-        """Clear chat history"""
-        self.storage.clear_chat_history()
+        """Clear chat history in SQLite"""
+        self.chat_storage.clear_chat_history()
     
     def shutdown(self):
         """Cleanup resources"""

@@ -285,7 +285,11 @@ multimodal-rag-system/
 - ✅ Vector similarity
 - ✅ Full-text search
 - ✅ Batch operations
-- ✅ Persistent Chat History
+
+### Chat History Storage
+
+- ✅ SQLite (Reliable file-based persistence)
+- ✅ Independent of Graph DB state
 
 ### User Experience
 
