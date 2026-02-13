@@ -42,6 +42,7 @@
 
 - **Unified Knowledge Graph**: Stores entities and relationships in ArangoDB, linking cross-modal concepts (e.g., linking a video frame to a text paragraph).
 - **Persistent Conversation History**: Chat history is reliably stored in **SQLite**, ensuring context is preserved across page reloads and browser sessions.
+- **Multiple Chats**: Manage multiple concurrent chat sessions with auto-titling, renaming, and deletion capabilities.
 - **"Clear Chat" Functionality**: User-controlled session management to reset context when needed.
 
 ### 🌐 Connectivity

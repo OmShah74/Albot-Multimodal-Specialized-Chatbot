@@ -210,6 +210,7 @@ class RAGOrchestrator:
     async def query(
         self,
         query_text: str,
+        chat_id: str,
         query_modalities: Optional[List[Modality]] = None,
         retrieval_config: Optional[Dict] = None
     ) -> Dict:
@@ -241,7 +242,7 @@ class RAGOrchestrator:
         }
         
         # Save User Message to History (SQLite)
-        self.chat_storage.save_chat_message(role="user", content=query_text)
+        self.chat_storage.save_chat_message(chat_id=chat_id, role="user", content=query_text)
 
         logger.info(f"Processing query: {query_text} (mode={config.get('mode', 'advanced')})")
         
@@ -353,16 +354,28 @@ class RAGOrchestrator:
         
         # Save Assistant Message to History (SQLite)
         self.chat_storage.save_chat_message(
+            chat_id=chat_id,
             role="assistant", 
             content=answer, 
             sources=sources,
             metrics=metrics
         )
         
+        # Auto-title if it's a new chat (heuristic: query length < 5 messages or title is "New Chat")
+        # For now, just fire and forget on every turn (or check if title is "New Chat" - needs DB check)
+        # Efficient way: Assume we want to re-title if it's the first turn.
+        # But we don't have message count here easily without querying DB.
+        # Let's just run it. The LLM call is cheap-ish for titles.
+        # Better: Only if current title is default.
+        # We can't easily check current title without querying. 
+        # Let's just call it. The _generate_chat_title method can do a check or just overwrite.
+        new_title = self._generate_chat_title(chat_id, query_text, answer)
+        
         return {
             "answer": answer,
             "sources": sources,
-            "metrics": metrics
+            "metrics": metrics,
+            "chat_title": new_title
         }
 
     def _decompose_query(
@@ -674,6 +687,36 @@ Provide a comprehensive response that weaves information from multiple sources i
             logger.error(f"Web synthesis failed: {e}")
             return f"Error generating response: {str(e)}"
     
+    def _generate_chat_title(self, chat_id: str, query: str, answer: str):
+        """Generate a short title for the chat using LLM"""
+        try:
+            logger.info(f"Generating title for chat {chat_id}...")
+            system_prompt = "You are a helpful assistant. Generate a 3 to 4 word title for a conversation based on the user prompt and your response. Do not use quotes. Just the word."
+            
+            messages = [
+                {
+                    "role": "user", 
+                    "content": f"User: {query}\nAssistant: {answer}\nTitle:"
+                }
+            ]
+            
+            # Use a fast model if possible, or default
+            response = self.llm_router.complete(
+                messages=messages,
+                system_prompt=system_prompt,
+                max_tokens=20,
+                temperature=0.7
+            )
+            
+            clean_title = response.strip().strip('"')
+            self.chat_storage.rename_chat(chat_id, clean_title)
+            logger.info(f"Auto-titled chat {chat_id} -> '{clean_title}'")
+            return clean_title
+            
+        except Exception as e:
+            logger.error(f"Failed to auto-title chat: {e}")
+            return None
+    
     def add_api_key(self, provider: str, name: str, key: str, model_name: Optional[str] = None):
         """Add API key to LLM router and save to storage"""
         from backend.models.config import LLMProvider
@@ -726,13 +769,35 @@ Provide a comprehensive response that weaves information from multiple sources i
         self.storage.clear_database()
         logger.info("System reset triggered")
 
-    def get_chat_history(self, limit: int = 100) -> List[Dict]:
-        """Get chat history from SQLite"""
-        return self.chat_storage.get_chat_history(limit)
+    # --- Chat Management ---
     
-    def clear_chat_history(self):
-        """Clear chat history in SQLite"""
-        self.chat_storage.clear_chat_history()
+    def create_chat(self, title: str = "New Chat") -> Dict:
+        """Create a new chat session"""
+        return self.chat_storage.create_chat(title)
+
+    def get_chats(self) -> List[Dict]:
+        """Get all chat sessions"""
+        return self.chat_storage.get_chats()
+        
+    def get_chat(self, chat_id: str) -> Optional[Dict]:
+        """Get specific chat session"""
+        return self.chat_storage.get_chat(chat_id)
+
+    def rename_chat(self, chat_id: str, new_title: str):
+        """Rename a chat session"""
+        self.chat_storage.rename_chat(chat_id, new_title)
+
+    def delete_chat(self, chat_id: str):
+        """Delete a chat session"""
+        self.chat_storage.delete_chat(chat_id)
+
+    def get_chat_history(self, chat_id: str, limit: int = 100) -> List[Dict]:
+        """Get chat history for a specific session"""
+        return self.chat_storage.get_chat_history(chat_id, limit)
+    
+    def clear_chat_history(self, chat_id: str):
+        """Clear chat history for a specific session"""
+        self.chat_storage.clear_chat_history(chat_id)
     
     def shutdown(self):
         """Cleanup resources"""

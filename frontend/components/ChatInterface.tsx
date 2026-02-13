@@ -6,7 +6,12 @@ import { cn } from '@/lib/utils';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNotification } from '@/context/NotificationContext';
 
-export function ChatInterface() {
+interface ChatInterfaceProps {
+  chatId: string | null;
+  onChatUpdated?: (chatId: string, updates: Partial<{ title: string }>) => void;
+}
+
+export function ChatInterface({ chatId, onChatUpdated }: ChatInterfaceProps) {
   const [input, setInput] = useState('');
   const [history, setHistory] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
@@ -27,19 +32,23 @@ export function ChatInterface() {
   const [showMetricsOverlay, setShowMetricsOverlay] = useState(false);
 
   useEffect(() => {
-    // Load history on mount
     const loadHistory = async () => {
+      if (!chatId) {
+          setHistory([]);
+          return;
+      }
       try {
-        const savedHistory = await api.getHistory();
-        if (savedHistory && savedHistory.length > 0) {
-          setHistory(savedHistory);
-        }
+        setLoading(true);
+        const savedHistory = await api.getChatHistory(chatId);
+        setHistory(savedHistory || []);
       } catch (err) {
         console.error('Failed to load history:', err);
+      } finally {
+        setLoading(false);
       }
     };
     loadHistory();
-  }, []);
+  }, [chatId]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -58,6 +67,8 @@ export function ChatInterface() {
     setInput('');
     setLoading(true);
 
+    if (!chatId) return; // Should not happen if UI is correct
+
     try {
       // Build config for API
       const config: RetrievalConfig = {
@@ -65,13 +76,7 @@ export function ChatInterface() {
         ...(retrievalMode === 'advanced' ? algorithms : {})
       };
 
-      // Pass empty history to API since backend now manages it, 
-      // OR pass full history for context if backend needs it immediate.
-      // Current backend implementation uses context from DB if I implement memory there?
-      // Actually, current backend just takes query. The Orchestrator doesn't accept "history" param in query() method yet.
-      // So passing history here is symbolic for now unless I update backend to use it.
-      // But query pipeline saves to history.
-      const response = await api.query(userMsg.content, history, config);
+      const response = await api.query(userMsg.content, chatId, history, config);
       
       const assistantMsg: Message = { 
         role: 'assistant', 
@@ -82,6 +87,10 @@ export function ChatInterface() {
       
       if (response.metrics) {
         setLastMetrics(response.metrics);
+      }
+
+      if (response.chat_title && chatId && onChatUpdated) {
+        onChatUpdated(chatId, { title: response.chat_title });
       }
       
       setHistory(prev => [...prev, assistantMsg]);
@@ -100,6 +109,8 @@ export function ChatInterface() {
   };
 
   const clearChat = () => {
+    if (!chatId) return;
+    
     showNotification({
       type: 'confirm',
       title: 'Clear Conversation',
@@ -107,7 +118,7 @@ export function ChatInterface() {
       confirmText: 'Clear',
       onConfirm: async () => {
         try {
-          await api.clearHistory();
+          await api.clearChatHistory(chatId);
           setHistory([]);
           showNotification({
             type: 'success',

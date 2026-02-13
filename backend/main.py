@@ -58,6 +58,7 @@ class RetrievalConfig(BaseModel):
 
 class QueryRequest(BaseModel):
     query: str
+    chat_id: str = "default"  # Added chat_id with default for backward compatibility
     modalities: Optional[List[str]] = None
     retrieval_config: Optional[RetrievalConfig] = None
 
@@ -78,6 +79,7 @@ class QueryResponse(BaseModel):
     answer: str
     sources: List[str] = []
     metrics: Optional[QueryMetrics] = None
+    chat_title: Optional[str] = None
 
 
 
@@ -177,7 +179,7 @@ async def query(request: QueryRequest):
             retrieval_config = request.retrieval_config.dict()
         
         # Query with config
-        result = await rag_system.query(request.query, modalities, retrieval_config)
+        result = await rag_system.query(request.query, request.chat_id, modalities, retrieval_config)
         
         # Build metrics if available
         metrics = None
@@ -187,7 +189,8 @@ async def query(request: QueryRequest):
         return QueryResponse(
             answer=result['answer'], 
             sources=result['sources'],
-            metrics=metrics
+            metrics=metrics,
+            chat_title=result.get('chat_title')
         )
         
     except Exception as e:
@@ -238,28 +241,95 @@ async def get_statistics():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/history")
-async def get_history():
-    """Get chat history"""
+
+# --- Chat Management Endpoints ---
+
+class CreateChatRequest(BaseModel):
+    title: str = "New Chat"
+
+class RenameChatRequest(BaseModel):
+    title: str
+
+@app.get("/chats")
+async def get_chats():
+    """Get all chat sessions"""
     try:
         if not rag_system:
             return []
-        return rag_system.get_chat_history()
+        return rag_system.get_chats()
     except Exception as e:
-        logger.error(f"Failed to get history: {e}")
+        logger.error(f"Failed to get chats: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-
-@app.delete("/history")
-async def clear_history():
-    """Clear chat history"""
+@app.post("/chats")
+async def create_chat(request: CreateChatRequest):
+    """Create a new chat"""
     try:
-        if rag_system:
-            rag_system.clear_chat_history()
+        return rag_system.create_chat(request.title)
+    except Exception as e:
+        logger.error(f"Failed to create chat: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/chats/{chat_id}")
+async def get_chat(chat_id: str):
+    """Get specific chat"""
+    try:
+        chat = rag_system.get_chat(chat_id)
+        if not chat:
+            raise HTTPException(status_code=404, detail="Chat not found")
+        return chat
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get chat {chat_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.patch("/chats/{chat_id}")
+async def rename_chat(chat_id: str, request: RenameChatRequest):
+    """Rename a chat"""
+    try:
+        rag_system.rename_chat(chat_id, request.title)
+        return {"status": "success", "id": chat_id, "title": request.title}
+    except Exception as e:
+        logger.error(f"Failed to rename chat: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/chats/{chat_id}")
+async def delete_chat(chat_id: str):
+    """Delete a chat session"""
+    try:
+        rag_system.delete_chat(chat_id)
         return {"status": "success"}
     except Exception as e:
-        logger.error(f"Failed to clear history: {e}")
+        logger.error(f"Failed to delete chat: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/chats/{chat_id}/history")
+async def get_chat_history(chat_id: str):
+    """Get history for specific chat"""
+    try:
+        if not rag_system:
+            return []
+        return rag_system.get_chat_history(chat_id)
+    except Exception as e:
+        logger.error(f"Failed to get chat history: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/chats/{chat_id}/history")
+async def clear_chat_history(chat_id: str):
+    """Clear history for specific chat"""
+    try:
+        rag_system.clear_chat_history(chat_id)
+        return {"status": "success"}
+    except Exception as e:
+        logger.error(f"Failed to clear chat history: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Deprecated/Legacy Endpoints (mapped to default or removed if preferred)
+# Keeping global /history compatible implies a default chat or aggregating all?
+# For now, let's point /history to a default fallback or warn.
+# Since we are moving to multi-chat, we should encourage using /chats/{id}/history.
+
 
 
 
