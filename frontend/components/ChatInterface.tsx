@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Paperclip, Bot, User, Trash2, StopCircle, Zap, Settings2, Clock, ChevronDown, ChevronUp, Activity, X, Globe } from 'lucide-react';
+import { Send, Paperclip, Bot, User, Trash2, StopCircle, Zap, Settings2, Clock, ChevronDown, ChevronUp, Activity, X, Globe, FileText } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { api, Message, RetrievalConfig, QueryMetrics } from '@/lib/api';
 import { cn } from '@/lib/utils';
@@ -193,19 +193,40 @@ export function ChatInterface({ chatId, onChatUpdated }: ChatInterfaceProps) {
               `}>
                 {msg.role === 'assistant' ? (
                   <div className="flex flex-col gap-3">
-                    <div className="prose prose-invert prose-sm max-w-none">
+                    <div className="prose prose-invert prose-base max-w-none prose-p:leading-relaxed prose-pre:my-4 prose-p:my-3 prose-headings:mb-4 prose-headings:mt-6 first:prose-headings:mt-0">
                       <ReactMarkdown>{msg.content}</ReactMarkdown>
                     </div>
                     {msg.sources && msg.sources.length > 0 && (
                       <div className="pt-3 border-t border-white/10 mt-1">
                         <p className="text-[10px] uppercase tracking-wider font-bold text-neutral-500 mb-2">Sources</p>
                         <div className="flex flex-wrap gap-2">
-                          {msg.sources.map((src, i) => (
-                            <span key={i} className="px-2 py-0.5 rounded-full bg-white/5 border border-white/10 text-[10px] text-neutral-400 flex items-center gap-1">
-                              {src.startsWith('http') ? <Globe className="w-2.5 h-2.5" /> : null}
-                              {src}
-                            </span>
-                          ))}
+                          {msg.sources.map((src, i) => {
+                            const isUrl = src.startsWith('http');
+                            let displayName = src;
+                            if (isUrl) {
+                              try {
+                                const url = new URL(src);
+                                displayName = url.hostname.replace('www.', '');
+                              } catch (e) {
+                                displayName = 'Link';
+                              }
+                            }
+                            return (
+                              <a 
+                                key={i} 
+                                href={isUrl ? src : undefined}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className={cn(
+                                  "px-2 py-0.5 rounded-full bg-white/5 border border-white/10 text-[10px] text-neutral-400 flex items-center gap-1 transition-colors",
+                                  isUrl ? "hover:bg-primary/10 hover:border-primary/30 hover:text-primary pointer-events-auto" : "pointer-events-none"
+                                )}
+                              >
+                                {isUrl ? <Globe className="w-2.5 h-2.5" /> : <FileText className="w-2.5 h-2.5" />}
+                                {displayName}
+                              </a>
+                            );
+                          })}
                         </div>
                       </div>
                     )}

@@ -433,53 +433,39 @@ RESPONSE PHILOSOPHY:
 Your goal is to educate and inform, not to showcase sources. Information should flow naturally like an expert explaining a topic to a colleague. Sources exist in the context, but your job is to synthesize knowledge into a coherent narrative.
 
 FORMATTING RULES:
-1. **Natural Paragraphs**: Write in substantial, well-developed paragraphs (4-8 sentences). Do NOT break into new paragraphs every 2-3 sentences. Let ideas breathe and develop fully.
-
-2. **NO Citation Markers**: NEVER use citation formats like [1], [2], (Source: X), "According to...", "As mentioned by...", etc. The user can see sources separately. Your job is to present the information as unified knowledge.
-
-3. **Markdown Structure**:
+1. **Semantic Hierarchy**: Use **Markdown headers (## and ###)** to organize information into logical, scannable sections.
+2. **Structural Spacing**: ENSURE at least two newlines between different Markdown blocks (paragraphs, headers, lists) to prevent congestion.
+3. **Strategic Emphasis**: Use **bold text** for primary terms, important concepts, and key definitions. Use it moderately but effectively for scanning.
+4. **Lists & Bullets**: Use bulleted or numbered lists for all enumerations, features, steps, or multi-point explanations.
+5. **Rich Synthesis**: Write like an expert. Within each section, maintain a professional and insightful tone while utilizing structural formatting.
+6. **No Meta-Talk**: Do NOT add "Sources", "References", or "According to..." markers. Focus purely on the content structure.
+7. **Spacing Excellence**: Maintain generous vertical spacing between sections to ensure a premium, modern chat experience.
+8.  **Markdown Structure**:
    - Use **bold** for key terms and important concepts (sparingly - 2-3 times per response maximum)
    - Use headers (##) only for major section breaks in complex multi-faceted topics
    - Use bullet points or numbered lists ONLY when listing distinct items/steps that genuinely benefit from enumeration
    - Use code blocks (```) only for actual code, commands, or technical syntax
    - Avoid excessive formatting - let the content speak for itself
 
-4. **Paragraph Flow**: Each paragraph should:
-   - Start with a clear topic sentence
-   - Develop the idea with supporting details and explanations
-   - Connect smoothly to the next paragraph using transitional phrases
-   - Be substantial enough to convey complete thoughts (4-7 sentences minimum)
-   - Build on previous paragraphs to create a logical progression
-
-5. **NO Redundant Sections**: Do NOT add "References", "Sources", "Bibliography", "Further Reading", or "Conclusion" sections at the end. These are handled automatically by the system.
-
 CONTENT GUIDELINES:
 - **Synthesis Over Summary**: Don't just list facts from different sources. Weave them into a coherent explanation that builds understanding progressively. Connect related concepts and show how they fit together.
-
+- **Contextual Depth**: Explain WHY things matter, HOW they work, and WHAT makes them different.
+- **Conversational Expertise**: Write like a knowledgeable expert having a conversation. Be engaging and clear.
+- **Code Inclusion**: Only provide code examples if explicitly requested or essential.
 - **Technical Precision**: Use exact terminology, numbers, and technical details from the context when relevant. Be specific rather than vague.
-
-- **Contextual Depth**: Explain WHY things matter, HOW they work, WHEN they're applicable, and WHAT makes them different - not just WHAT they are. Provide insight, not just information.
-
-- **Conversational Expertise**: Write like a knowledgeable expert having a conversation, not like a formal academic paper or Wikipedia article. Be engaging and clear.
-
-- **Code Inclusion**: Only provide code examples if the query explicitly requests implementation details, asks "how to" do something programmatically, or clearly needs a code sample to be fully answered.
-
-- **Avoid Formulaic Structure**: Don't follow rigid templates like "Introduction → Body → Conclusion". Let the content determine the structure organically.
 
 GROUNDING RULES:
 - Only use information present in the provided context
 - If information is insufficient, acknowledge gaps clearly: "Based on the available information..." or "The provided sources don't specify..."
 - Never invent facts or extrapolate beyond what's given
-- If the context is contradictory, present both perspectives clearly without taking sides
+- If the context is contradictory, present both perspectives clearly without taking sides.
 
 EXAMPLE OF EXCELLENT FLOW:
 "Graph RAG and Vector RAG represent two fundamentally different approaches to retrieval-augmented generation, each optimized for distinct use cases and data structures. Understanding their differences is crucial for selecting the right architecture for your specific application needs.
 
 Vector RAG operates by converting documents into dense numerical embeddings that capture semantic meaning in high-dimensional space. This approach excels at finding conceptually similar content across large, unstructured text corpora through similarity search. Vector databases like Milvus and Pinecone power these systems, enabling fast nearest-neighbor searches across millions of embeddings. The strength of Vector RAG lies in its ability to retrieve relevant information even when exact keywords don't match, making it ideal for general-purpose question answering and broad knowledge retrieval tasks.
 
-Graph RAG takes a more structured approach by representing knowledge as an interconnected network of entities and relationships. Instead of relying solely on semantic similarity, it leverages explicit connections between concepts stored in graph databases. This enables sophisticated multi-hop reasoning where the system can traverse relationships to answer complex queries that require understanding how different pieces of information connect. For instance, answering "What companies did the former CEO of Microsoft invest in after retiring?" requires following multiple relationship chains that Vector RAG would struggle with.
-
-The practical implications of choosing between these approaches are significant. Vector RAG offers simpler implementation and lower maintenance overhead, making it the default choice for most retrieval tasks. Graph RAG requires substantial upfront investment in knowledge graph construction and maintenance but delivers superior performance for domain-specific applications where entity relationships are central. Many production systems now adopt hybrid architectures that combine both approaches, using Graph RAG for structured queries over known entities while falling back to Vector RAG for broader semantic search."
+Graph RAG takes a more structured approach by representing knowledge as an interconnected network of entities and relationships. Instead of relying solely on semantic similarity, it leverages explicit connections between concepts stored in graph databases. This enables sophisticated multi-hop reasoning where the system can traverse relationships to answer complex queries that require understanding how different pieces of information connect. For instance, answering 'What companies did the former CEO of Microsoft invest in after retiring?' requires following multiple relationship chains that Vector RAG would struggle with.
 
 EXAMPLE OF POOR FLOW (AVOID THIS):
 "According to Designveloper, Graph RAG and Vector RAG are different approaches.
@@ -496,13 +482,16 @@ References:
 1. Designveloper
 2. Instaclustr 
 3. Ragaboutit"
-
-CRITICAL REMINDERS:
-- Write in flowing, connected paragraphs - not choppy 2-3 sentence blocks
-- NO citation markers anywhere in the response
-- NO reference/source sections at the end
-- Let ideas develop fully before moving to the next concept
-- Sound like an expert teacher, not a robot aggregating sources"""
+FORMATTING RULES:
+1. **Rich Markdown**: Use a professional Markdown structure (headers, bolding, lists) to make the response highly readable.
+2. **Structural Bolding**: Use **bold** for key terms, definitions, and important concepts to help users scan the information.
+3. **Lists & Bullets**: Use bullet points or numbered lists for features, steps, or distinct categories of information.
+4. **Logical Headers**: Use `##` and `###` headers to organize the response into clear, distinct sections (e.g., Overview, How it Works, Applications).
+5. **Flowing Tone**: Maintain the tone of an expert teacher. While using Markdown structure, ensure the prose within sections remains insightful and professional.
+6. **No Citations**: Do NOT use citation markers (e.g., [1], [Source: X]) in the text.
+7. **No Ending Sections**: Do NOT add a "References" or "Sources" section at the end of the text response. The system handles sources separately.
+The practical implications of choosing between these approaches are significant. Vector RAG offers simpler implementation and lower maintenance overhead, making it the default choice for most retrieval tasks. Graph RAG requires substantial upfront investment in knowledge graph construction and maintenance but delivers superior performance for domain-specific applications where entity relationships are central."
+"""
         
         user_prompt = f"""Based on the following context, answer the user's question with natural, flowing prose.
 
@@ -584,92 +573,21 @@ RESPONSE PHILOSOPHY:
 Your goal is to provide comprehensive, accurate answers by synthesizing information from multiple web sources into a coherent narrative. Present knowledge naturally without excessive attribution that disrupts reading flow.
 
 FORMATTING RULES:
-1. **Natural Paragraphs**: Write in substantial, well-developed paragraphs (5-8 sentences). Do NOT break into new paragraphs every 2-3 sentences. Let ideas develop fully within each paragraph before transitioning.
+1. **Professional Structure**: Use **Markdown headers (## and ###)** to organize the answer into logical sections. Avoid long, unbroken walls of text.
+2. **Strategic Bolding**: Use **bold text** to highlight key terms, critical facts, and core concepts.
+3. **Lists for Clusters**: When presenting multiple features, advantages, or categories, use bulleted or numbered lists.
+4. **Rich Synthesis**: Synthesize information across sources to provide a unified, deep explanation rather than a list of "according to X..." summaries.
+5. **No Citations**: Do NOT use citation markers (e.g., [1], [2], (Source: X)) in the response text.
+6. **No Ending Sections**: Do NOT add "Sources", "References", or "Further Reading" at the end of the response. The system displays them separately."""
 
-2. **Minimal Attribution**: While you can occasionally attribute major claims to sources, do NOT constantly interrupt flow with citations. Instead:
-   - GOOD: "Recent developments in the field show that..." (no attribution)
-   - GOOD: "Industry analysis reveals that..." (no attribution)
-   - ACCEPTABLE (use sparingly): "Research from leading institutions indicates that..." (vague attribution)
-   - BAD: "According to TechCrunch..." (specific attribution - avoid unless critical)
-   - NEVER: [1], [2], (Source: X) notation
+        user_prompt = f"""Synthesize a comprehensive answer for the following query based on the provided web evidence.
+        
+Query: {query}
 
-3. **Markdown Structure**:
-   - Use **bold** sparingly for key terms (2-4 times maximum)
-   - Use headers (##) only for major section breaks in complex topics
-   - Use bullet points or numbered lists ONLY when listing distinct items
-   - Avoid excessive formatting
-
-4. **Paragraph Development**: Each paragraph should:
-   - Start with a clear topic sentence
-   - Develop 3-5 supporting points
-   - Use transitions between paragraphs ("Building on this...", "This approach...", "However...")
-   - Maintain conceptual coherence within the paragraph
-
-5. **NO Redundant Sections**: Do NOT add "References", "Sources", "Conclusion", or "Summary" sections. These are handled by the system.
-
-CONTENT GUIDELINES:
-- **Authority Awareness**: Give more weight to official documentation, academic sources, and reputable news outlets over forums or blogs. Synthesize authoritative sources first.
-
-- **Conflict Resolution**: If sources disagree, present both perspectives naturally: "While some implementations favor X, others demonstrate Y provides better results in specific scenarios." Don't flag conflicts explicitly unless critical to the answer.
-
-- **Technical Precision**: Include specific numbers, dates, and technical details from sources. Be precise.
-
-- **Synthesis Over Listing**: Don't present information source-by-source. Instead, identify themes across sources and present unified insights.
-
-- **Code Examples**: Only include code if the query explicitly requests implementation or asks "how to" do something programmatically.
-
-- **Recency**: For time-sensitive queries, naturally incorporate temporal context without over-emphasizing it: "The latest data shows..." rather than "As of [specific date]..."
-
-GROUNDING RULES:
-- Only use information from the provided web search results
-- If information is contradictory, present multiple viewpoints without declaring one correct
-- If sources lack depth on a specific aspect, acknowledge this briefly: "While comprehensive data on X isn't readily available..."
-- Never invent information not present in the sources
-
-EXAMPLE OF EXCELLENT WEB SYNTHESIS:
-"Graph RAG and Vector RAG represent distinct paradigms in retrieval-augmented generation, each offering unique advantages for different use cases. The fundamental difference lies in how they structure and query information, which has significant implications for system design and performance.
-
-Vector RAG systems encode documents as dense embeddings in high-dimensional vector space, enabling semantic similarity search across large corpora. This approach excels at retrieving conceptually related content even when exact terminology differs. Modern implementations leverage specialized vector databases optimized for billion-scale approximate nearest neighbor search, achieving sub-second query latency. The simplicity of this architecture makes it the default choice for general-purpose question answering, content recommendation, and broad knowledge retrieval tasks.
-
-Graph RAG extends beyond pure semantic similarity by explicitly modeling relationships between entities through knowledge graphs. This structural representation enables multi-hop reasoning and complex queries that traverse entity connections. The approach proves particularly valuable in domains with rich relational data, such as scientific literature, financial networks, or organizational hierarchies. By maintaining explicit edges between concepts, Graph RAG can answer queries like "Which companies founded by former Google engineers received Series A funding in 2023?" that require chaining multiple relationship types.
-
-Performance characteristics differ substantially between these approaches. Vector RAG offers superior scaling for unstructured text and simpler maintenance, while Graph RAG provides more precise answers for relationship-oriented queries but requires significant investment in graph construction and curation. Recent hybrid architectures attempt to capture both benefits by using Graph RAG for entity-centric queries while falling back to Vector RAG for broader semantic search, though this adds architectural complexity. The choice ultimately depends on whether your use case primarily involves semantic content retrieval or requires explicit reasoning over entity relationships."
-
-EXAMPLE OF POOR WEB SYNTHESIS (AVOID THIS):
-"According to TechCrunch, Graph RAG is different from Vector RAG.
-
-Designveloper explains that Vector RAG uses embeddings. The article from Instaclustr notes this is effective.
-
-Wikipedia states that Graph databases store relationships. Ragaboutit mentions this enables complex queries.
-
-Meilisearch provides details on when to use each approach. According to their blog post, it depends on requirements.
-
-Sources indicate hybrid approaches exist. Multiple articles discuss this option.
-
-References:
-- TechCrunch
-- Designveloper
-- Instaclustr
-- Wikipedia
-- Ragaboutit
-- Meilisearch"
-
-CRITICAL REMINDERS:
-- Write in flowing 5-8 sentence paragraphs, not choppy fragments
-- Synthesize across sources - don't present source-by-source
-- Minimize explicit attribution - let information flow naturally
-- NO citation markers like [1], [2], or (Source: X)
-- NO reference/source sections at the end
-- Build conceptual understanding progressively across paragraphs"""
-
-        user_prompt = f"""Based on the real-time web search results below, answer the user's question with natural, flowing synthesis.
-
-Context:
+Evidence:
 {evidence}
 
-Question: {query}
-
-Provide a comprehensive response that weaves information from multiple sources into a coherent explanation:"""
+Answer in a well-structured, professional Markdown format:"""
 
         messages = [
             {"role": "user", "content": user_prompt}
