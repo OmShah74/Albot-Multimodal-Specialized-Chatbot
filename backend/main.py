@@ -61,6 +61,7 @@ class QueryRequest(BaseModel):
     chat_id: str = "default"  # Added chat_id with default for backward compatibility
     modalities: Optional[List[str]] = None
     retrieval_config: Optional[RetrievalConfig] = None
+    search_mode: str = "web_search"  # "web_search" | "knowledge_base"
 
 
 class QueryMetrics(BaseModel):
@@ -73,6 +74,10 @@ class QueryMetrics(BaseModel):
     results_count: int = 0
     mode: str = "advanced"
     algorithms_used: List[str] = []
+    web_search_used: bool = False
+    web_search_time_ms: float = 0
+    web_providers_used: dict = {}
+    search_mode: str = "web_search"
 
 
 class QueryResponse(BaseModel):
@@ -178,8 +183,14 @@ async def query(request: QueryRequest):
         if request.retrieval_config:
             retrieval_config = request.retrieval_config.dict()
         
-        # Query with config
-        result = await rag_system.query(request.query, request.chat_id, modalities, retrieval_config)
+        # Query with config and search mode
+        result = await rag_system.query(
+            request.query, 
+            request.chat_id, 
+            modalities, 
+            retrieval_config,
+            search_mode=request.search_mode
+        )
         
         # Build metrics if available
         metrics = None
@@ -195,6 +206,20 @@ async def query(request: QueryRequest):
         
     except Exception as e:
         logger.error(f"Query error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class CancelRequest(BaseModel):
+    chat_id: str
+
+@app.post("/query/cancel")
+async def cancel_query(request: CancelRequest):
+    """Cancel an in-progress query for a given chat"""
+    try:
+        rag_system.cancel_query(request.chat_id)
+        return {"status": "cancelled", "chat_id": request.chat_id}
+    except Exception as e:
+        logger.error(f"Cancel error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

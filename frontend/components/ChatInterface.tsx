@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Paperclip, Bot, User, Trash2, StopCircle, Zap, Settings2, Clock, ChevronDown, ChevronUp, Activity, X, Globe, FileText } from 'lucide-react';
+import { Send, Paperclip, Bot, User, Trash2, StopCircle, Zap, Settings2, Clock, ChevronDown, ChevronUp, Activity, X, Globe, FileText, BookOpen } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
+import axios from 'axios';
 import { api, Message, RetrievalConfig, QueryMetrics } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -30,6 +31,12 @@ export function ChatInterface({ chatId, onChatUpdated }: ChatInterfaceProps) {
   });
   const [lastMetrics, setLastMetrics] = useState<QueryMetrics | null>(null);
   const [showMetricsOverlay, setShowMetricsOverlay] = useState(false);
+
+  // Search mode: web_search (with fallback) or knowledge_base (local only)
+  const [searchMode, setSearchMode] = useState<'web_search' | 'knowledge_base'>('knowledge_base');
+
+  // Abort controller for stopping queries
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     const loadHistory = async () => {
@@ -69,14 +76,19 @@ export function ChatInterface({ chatId, onChatUpdated }: ChatInterfaceProps) {
 
     if (!chatId) return; // Should not happen if UI is correct
 
+    // Create a new AbortController for this request
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     try {
-      // Build config for API
+      // Build config for API with search mode
       const config: RetrievalConfig = {
         mode: retrievalMode,
-        ...(retrievalMode === 'advanced' ? algorithms : {})
+        ...(retrievalMode === 'advanced' ? algorithms : {}),
+        search_mode: searchMode
       };
 
-      const response = await api.query(userMsg.content, chatId, history, config);
+      const response = await api.query(userMsg.content, chatId, history, config, controller.signal);
       
       const assistantMsg: Message = { 
         role: 'assistant', 
@@ -95,16 +107,39 @@ export function ChatInterface({ chatId, onChatUpdated }: ChatInterfaceProps) {
       
       setHistory(prev => [...prev, assistantMsg]);
     } catch (err) {
-      console.error('Query error', err);
-      showNotification({
-        type: 'error',
-        title: 'Query Failed',
-        message: 'There was an issue connecting to the Albot engine. please check the backend status.'
-      });
-      const errorMsg: Message = { role: 'assistant', content: `**Error**: ${err instanceof Error ? err.message : 'Unknown error'}` };
-      setHistory(prev => [...prev, errorMsg]);
+      // Check if this was an intentional abort (stop button)
+      if (axios.isCancel(err) || (err instanceof DOMException && err.name === 'AbortError')) {
+        // User clicked stop - append stopped message
+        const stoppedMsg: Message = { role: 'assistant', content: '⏹ Generation stopped by user.' };
+        setHistory(prev => [...prev, stoppedMsg]);
+      } else {
+        console.error('Query error', err);
+        showNotification({
+          type: 'error',
+          title: 'Query Failed',
+          message: 'There was an issue connecting to the Albot engine. please check the backend status.'
+        });
+        const errorMsg: Message = { role: 'assistant', content: `**Error**: ${err instanceof Error ? err.message : 'Unknown error'}` };
+        setHistory(prev => [...prev, errorMsg]);
+      }
     } finally {
       setLoading(false);
+      abortControllerRef.current = null;
+    }
+  };
+
+  const handleStop = async () => {
+    // Abort the in-flight HTTP request
+    abortControllerRef.current?.abort();
+
+    // Also notify the backend to cancel server-side processing
+    if (chatId) {
+      try {
+        await api.cancelQuery(chatId);
+      } catch (e) {
+        // Best-effort — the abort above is the primary mechanism
+        console.warn('Backend cancel failed:', e);
+      }
     }
   };
 
@@ -277,10 +312,39 @@ export function ChatInterface({ chatId, onChatUpdated }: ChatInterfaceProps) {
       </div>
 
       <div className="p-4 md:p-6 w-full max-w-4xl mx-auto space-y-4">
-        {/* RAG Mode & Metrics Panel */}
+        {/* Search Mode & RAG Mode Panel */}
         <div className="flex flex-col gap-3">
-          <div className="flex items-center justify-between px-2">
-            <div className="flex items-center gap-4">
+          <div className="flex items-center justify-between px-2 flex-wrap gap-2">
+            <div className="flex items-center gap-3">
+              {/* Search Mode Toggle */}
+              <div className="flex bg-white/5 p-1 rounded-xl border border-white/10">
+                <button
+                  onClick={() => setSearchMode('knowledge_base')}
+                  className={cn(
+                    "flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-all",
+                    searchMode === 'knowledge_base' 
+                      ? "bg-purple-600 text-white shadow-lg shadow-purple-600/20" 
+                      : "text-neutral-400 hover:text-neutral-200"
+                  )}
+                >
+                  <BookOpen className="w-3.5 h-3.5" />
+                  Knowledge Base
+                </button>
+                <button
+                  onClick={() => setSearchMode('web_search')}
+                  className={cn(
+                    "flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-all",
+                    searchMode === 'web_search' 
+                      ? "bg-purple-600 text-white shadow-lg shadow-purple-600/20" 
+                      : "text-neutral-400 hover:text-neutral-200"
+                  )}
+                >
+                  <Globe className="w-3.5 h-3.5" />
+                  Web Search
+                </button>
+              </div>
+
+              {/* Retrieval Mode Toggle */}
               <div className="flex bg-white/5 p-1 rounded-xl border border-white/10">
                 <button
                   onClick={() => setRetrievalMode('fast')}
@@ -373,16 +437,28 @@ export function ChatInterface({ chatId, onChatUpdated }: ChatInterfaceProps) {
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder={`Ask Albot anything... (${retrievalMode} RAG enabled)`}
+            placeholder={`Ask Albot anything... (${searchMode === 'knowledge_base' ? '📚 KB' : '🌐 Web'} · ${retrievalMode} RAG)`}
             className="w-full input-glass rounded-2xl py-4 pl-5 pr-14 text-sm focus:outline-none transition-all placeholder:text-neutral-500 text-white shadow-2xl"
+            disabled={loading}
           />
-          <button 
-            type="submit"
-            disabled={!input.trim() || loading}
-            className="absolute right-2 top-2 p-2 bg-white/10 hover:bg-primary text-white rounded-xl transition-colors disabled:opacity-50 disabled:hover:bg-white/10 group-hover:scale-105 active:scale-95 duration-200"
-          >
-             {loading ? <StopCircle className="w-5 h-5 animate-pulse" /> : <Send className="w-5 h-5" />}
-          </button>
+          {loading ? (
+            <button 
+              type="button"
+              onClick={handleStop}
+              className="absolute right-2 top-2 p-2 bg-red-500/20 hover:bg-red-500/40 text-red-400 hover:text-red-300 rounded-xl transition-colors active:scale-95 duration-200 border border-red-500/30"
+              title="Stop generation"
+            >
+              <StopCircle className="w-5 h-5" />
+            </button>
+          ) : (
+            <button 
+              type="submit"
+              disabled={!input.trim()}
+              className="absolute right-2 top-2 p-2 bg-white/10 hover:bg-primary text-white rounded-xl transition-colors disabled:opacity-50 disabled:hover:bg-white/10 group-hover:scale-105 active:scale-95 duration-200"
+            >
+              <Send className="w-5 h-5" />
+            </button>
+          )}
         </form>
         <p className="text-center text-[10px] text-neutral-600 uppercase tracking-widest font-medium">
            Albot Multi-Modal Intelligence Engine v1.0

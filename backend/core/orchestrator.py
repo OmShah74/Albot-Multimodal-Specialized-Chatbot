@@ -83,10 +83,26 @@ class RAGOrchestrator:
         # Web Search
         self.web_search = WebSearchEngine()
         
+        # Cancellation tracking
+        self._cancelled_chats: set = set()
+        
         # Load persistent API keys
         self._load_persistent_keys()
         
         logger.info("RAG system initialized successfully")
+    
+    def cancel_query(self, chat_id: str):
+        """Mark a chat's query as cancelled"""
+        self._cancelled_chats.add(chat_id)
+        logger.info(f"Query cancelled for chat {chat_id}")
+    
+    def is_cancelled(self, chat_id: str) -> bool:
+        """Check if a chat's query has been cancelled"""
+        return chat_id in self._cancelled_chats
+    
+    def _clear_cancellation(self, chat_id: str):
+        """Clear cancellation flag for a chat"""
+        self._cancelled_chats.discard(chat_id)
 
     def _load_persistent_keys(self):
         """Load API keys from persistent storage"""
@@ -212,22 +228,29 @@ class RAGOrchestrator:
         query_text: str,
         chat_id: str,
         query_modalities: Optional[List[Modality]] = None,
-        retrieval_config: Optional[Dict] = None
+        retrieval_config: Optional[Dict] = None,
+        search_mode: str = "web_search"
     ) -> Dict:
         """
         Main query pipeline with configurable retrieval
+        
+        Args:
+            search_mode: "web_search" (local + web fallback) or "knowledge_base" (local only)
         
         Returns dict with answer, sources, and performance metrics
         """
         import time
         start_time = time.time()
         
+        # Clear any previous cancellation for this chat
+        self._clear_cancellation(chat_id)
+        
         if not query_text or not query_text.strip():
             logger.warning("Empty query received")
             return {
                 "answer": "Please provide a query.",
                 "sources": [],
-                "metrics": {"total_time_ms": 0, "mode": "none"}
+                "metrics": {"total_time_ms": 0, "mode": "none", "search_mode": search_mode}
             }
         
         # Default config: Advanced mode with all algorithms
@@ -244,25 +267,38 @@ class RAGOrchestrator:
         # Save User Message to History (SQLite)
         self.chat_storage.save_chat_message(chat_id=chat_id, role="user", content=query_text)
 
-        logger.info(f"Processing query: {query_text} (mode={config.get('mode', 'advanced')})")
+        logger.info(f"Processing query: {query_text} (mode={config.get('mode', 'advanced')}, search_mode={search_mode})")
+        
+        # Cancellation checkpoint 1: Before retrieval
+        if self.is_cancelled(chat_id):
+            return self._cancelled_response(chat_id, start_time, config, search_mode)
         
         # Step 1: Query decomposition
         query_decomp = self._decompose_query(query_text, query_modalities)
         
-        # Step 2: Retrieval with config and timing
+        # Step 2: Retrieval with config and timing (SAME algorithms for both modes)
         retrieval_start = time.time()
         results, retrieval_metrics = self.retriever.retrieve(query_decomp, query_text, config)
         retrieval_time = (time.time() - retrieval_start) * 1000
         
+        # Cancellation checkpoint 2: After retrieval
+        if self.is_cancelled(chat_id):
+            return self._cancelled_response(chat_id, start_time, config, search_mode)
+        
         # Step 3: Format evidence for LLM and extract unique sources
         evidence, sources = self._format_evidence(results)
         
-        # Step 3.5: Context sufficiency check → Web search fallback
+        # Step 3.5: Context sufficiency check → Web search fallback (ONLY in web_search mode)
         web_search_used = False
         web_search_metrics = {}
         
-        if not self._is_context_sufficient(results, evidence, query_text):
-            logger.info("Local context insufficient - triggering web search")
+        if search_mode == "web_search" and not self._is_context_sufficient(results, evidence, query_text):
+            logger.info("Local context insufficient - triggering web search (web_search mode)")
+            
+            # Cancellation checkpoint 3: Before web search
+            if self.is_cancelled(chat_id):
+                return self._cancelled_response(chat_id, start_time, config, search_mode)
+            
             try:
                 web_results, web_metrics = await self.web_search.search(query_text, top_k=10)
                 web_search_metrics = web_metrics
@@ -297,6 +333,7 @@ class RAGOrchestrator:
                             "mode": config.get("mode", "advanced"),
                             "web_search_used": True,
                             "web_search_time_ms": round(web_metrics.get("web_search_time_ms", 0), 1),
+                            "search_mode": search_mode,
                             "status": "failed_retrieval"
                         }
                         
@@ -313,19 +350,33 @@ class RAGOrchestrator:
                      return {
                         "answer": "I encountered an error while searching the web and have no local information on this topic.",
                         "sources": [],
-                        "metrics": {"total_time_ms": round((time.time() - start_time) * 1000, 1), "error": str(e)}
+                        "metrics": {"total_time_ms": round((time.time() - start_time) * 1000, 1), "search_mode": search_mode, "error": str(e)}
                     }
+        elif search_mode == "knowledge_base":
+            logger.info("Knowledge Base mode - skipping web search fallback")
         
         # Step 4: LLM synthesis with timing
         synthesis_start = time.time()
         
         # GUARDRAIL: Final check before synthesis
         if not evidence or len(evidence.strip()) < 100:
-             return {
-                "answer": "I have no information available to answer this query.",
-                "sources": [],
-                "metrics": {"total_time_ms": round((time.time() - start_time) * 1000, 1), "status": "no_context"}
-            }
+            if search_mode == "knowledge_base":
+                # In KB mode, give a helpful message suggesting web search
+                return {
+                    "answer": "I don't have enough information in the knowledge base to fully answer this query. Try switching to **Web Search** mode for more comprehensive results.",
+                    "sources": [],
+                    "metrics": {"total_time_ms": round((time.time() - start_time) * 1000, 1), "search_mode": search_mode, "status": "insufficient_kb"}
+                }
+            else:
+                return {
+                    "answer": "I have no information available to answer this query.",
+                    "sources": [],
+                    "metrics": {"total_time_ms": round((time.time() - start_time) * 1000, 1), "search_mode": search_mode, "status": "no_context"}
+                }
+
+        # Cancellation checkpoint 4: Before LLM synthesis
+        if self.is_cancelled(chat_id):
+            return self._cancelled_response(chat_id, start_time, config, search_mode)
 
         if web_search_used:
             answer = self._synthesize_with_web_context(query_text, evidence)
@@ -347,10 +398,11 @@ class RAGOrchestrator:
             "algorithms_used": retrieval_metrics.get("algorithms_used", []),
             "web_search_used": web_search_used,
             "web_search_time_ms": round(web_search_metrics.get("web_search_time_ms", 0), 1),
-            "web_providers_used": web_search_metrics.get("provider_breakdown", {})
+            "web_providers_used": web_search_metrics.get("provider_breakdown", {}),
+            "search_mode": search_mode
         }
         
-        logger.info(f"Query completed in {total_time:.0f}ms (retrieval: {retrieval_time:.0f}ms, synthesis: {synthesis_time:.0f}ms, web_search: {web_search_used})")
+        logger.info(f"Query completed in {total_time:.0f}ms (retrieval: {retrieval_time:.0f}ms, synthesis: {synthesis_time:.0f}ms, web_search: {web_search_used}, search_mode: {search_mode})")
         
         # Save Assistant Message to History (SQLite)
         self.chat_storage.save_chat_message(
@@ -361,14 +413,6 @@ class RAGOrchestrator:
             metrics=metrics
         )
         
-        # Auto-title if it's a new chat (heuristic: query length < 5 messages or title is "New Chat")
-        # For now, just fire and forget on every turn (or check if title is "New Chat" - needs DB check)
-        # Efficient way: Assume we want to re-title if it's the first turn.
-        # But we don't have message count here easily without querying DB.
-        # Let's just run it. The LLM call is cheap-ish for titles.
-        # Better: Only if current title is default.
-        # We can't easily check current title without querying. 
-        # Let's just call it. The _generate_chat_title method can do a check or just overwrite.
         new_title = self._generate_chat_title(chat_id, query_text, answer)
         
         return {
@@ -424,84 +468,219 @@ class RAGOrchestrator:
         
         return "\n\n".join(evidence_parts), list(unique_sources)
 
-    def _synthesize_answer(self, query: str, evidence: str) -> str:
-        """Use LLM to synthesize final answer"""
+    def _cancelled_response(self, chat_id: str, start_time, config: Dict, search_mode: str) -> Dict:
+        """Generate a standardized response when a query is cancelled by the user."""
+        import time
+        self._clear_cancellation(chat_id)
         
-        system_prompt = """You are Albot, an advanced AI research assistant designed to provide clear, comprehensive answers with natural flow.
-
-RESPONSE PHILOSOPHY:
-Your goal is to educate and inform, not to showcase sources. Information should flow naturally like an expert explaining a topic to a colleague. Sources exist in the context, but your job is to synthesize knowledge into a coherent narrative.
-
-FORMATTING RULES:
-1. **Semantic Hierarchy**: Use **Markdown headers (## and ###)** to organize information into logical, scannable sections.
-2. **Structural Spacing**: ENSURE at least two newlines between different Markdown blocks (paragraphs, headers, lists) to prevent congestion.
-3. **Strategic Emphasis**: Use **bold text** for primary terms, important concepts, and key definitions. Use it moderately but effectively for scanning.
-4. **Lists & Bullets**: Use bulleted or numbered lists for all enumerations, features, steps, or multi-point explanations.
-5. **Rich Synthesis**: Write like an expert. Within each section, maintain a professional and insightful tone while utilizing structural formatting.
-6. **No Meta-Talk**: Do NOT add "Sources", "References", or "According to..." markers. Focus purely on the content structure.
-7. **Spacing Excellence**: Maintain generous vertical spacing between sections to ensure a premium, modern chat experience.
-8.  **Markdown Structure**:
-   - Use **bold** for key terms and important concepts (sparingly - 2-3 times per response maximum)
-   - Use headers (##) only for major section breaks in complex multi-faceted topics
-   - Use bullet points or numbered lists ONLY when listing distinct items/steps that genuinely benefit from enumeration
-   - Use code blocks (```) only for actual code, commands, or technical syntax
-   - Avoid excessive formatting - let the content speak for itself
-
-CONTENT GUIDELINES:
-- **Synthesis Over Summary**: Don't just list facts from different sources. Weave them into a coherent explanation that builds understanding progressively. Connect related concepts and show how they fit together.
-- **Contextual Depth**: Explain WHY things matter, HOW they work, and WHAT makes them different.
-- **Conversational Expertise**: Write like a knowledgeable expert having a conversation. Be engaging and clear.
-- **Code Inclusion**: Only provide code examples if explicitly requested or essential.
-- **Technical Precision**: Use exact terminology, numbers, and technical details from the context when relevant. Be specific rather than vague.
-
-GROUNDING RULES:
-- Only use information present in the provided context
-- If information is insufficient, acknowledge gaps clearly: "Based on the available information..." or "The provided sources don't specify..."
-- Never invent facts or extrapolate beyond what's given
-- If the context is contradictory, present both perspectives clearly without taking sides.
-
-EXAMPLE OF EXCELLENT FLOW:
-"Graph RAG and Vector RAG represent two fundamentally different approaches to retrieval-augmented generation, each optimized for distinct use cases and data structures. Understanding their differences is crucial for selecting the right architecture for your specific application needs.
-
-Vector RAG operates by converting documents into dense numerical embeddings that capture semantic meaning in high-dimensional space. This approach excels at finding conceptually similar content across large, unstructured text corpora through similarity search. Vector databases like Milvus and Pinecone power these systems, enabling fast nearest-neighbor searches across millions of embeddings. The strength of Vector RAG lies in its ability to retrieve relevant information even when exact keywords don't match, making it ideal for general-purpose question answering and broad knowledge retrieval tasks.
-
-Graph RAG takes a more structured approach by representing knowledge as an interconnected network of entities and relationships. Instead of relying solely on semantic similarity, it leverages explicit connections between concepts stored in graph databases. This enables sophisticated multi-hop reasoning where the system can traverse relationships to answer complex queries that require understanding how different pieces of information connect. For instance, answering 'What companies did the former CEO of Microsoft invest in after retiring?' requires following multiple relationship chains that Vector RAG would struggle with.
-
-EXAMPLE OF POOR FLOW (AVOID THIS):
-"According to Designveloper, Graph RAG and Vector RAG are different approaches.
-
-Vector RAG uses embeddings. As Instaclustr explains, this method works well.
-
-Graph RAG uses knowledge graphs. Ragaboutit notes that it handles relationships.
-
-The choice depends on requirements. Meilisearch provides comparison details.
-
-In conclusion, both methods have uses.
-
-References:
-1. Designveloper
-2. Instaclustr 
-3. Ragaboutit"
-FORMATTING RULES:
-1. **Rich Markdown**: Use a professional Markdown structure (headers, bolding, lists) to make the response highly readable.
-2. **Structural Bolding**: Use **bold** for key terms, definitions, and important concepts to help users scan the information.
-3. **Lists & Bullets**: Use bullet points or numbered lists for features, steps, or distinct categories of information.
-4. **Logical Headers**: Use `##` and `###` headers to organize the response into clear, distinct sections (e.g., Overview, How it Works, Applications).
-5. **Flowing Tone**: Maintain the tone of an expert teacher. While using Markdown structure, ensure the prose within sections remains insightful and professional.
-6. **No Citations**: Do NOT use citation markers (e.g., [1], [Source: X]) in the text.
-7. **No Ending Sections**: Do NOT add a "References" or "Sources" section at the end of the text response. The system handles sources separately.
-The practical implications of choosing between these approaches are significant. Vector RAG offers simpler implementation and lower maintenance overhead, making it the default choice for most retrieval tasks. Graph RAG requires substantial upfront investment in knowledge graph construction and maintenance but delivers superior performance for domain-specific applications where entity relationships are central."
-"""
+        cancelled_msg = "⏹ Generation stopped by user."
+        total_time = round((time.time() - start_time) * 1000, 1)
         
-        user_prompt = f"""Based on the following context, answer the user's question with natural, flowing prose.
+        # Save the cancellation message to chat history
+        self.chat_storage.save_chat_message(
+            chat_id=chat_id,
+            role="assistant",
+            content=cancelled_msg
+        )
+        
+        return {
+            "answer": cancelled_msg,
+            "sources": [],
+            "metrics": {
+                "total_time_ms": total_time,
+                "mode": config.get("mode", "advanced"),
+                "search_mode": search_mode,
+                "status": "cancelled"
+            }
+        }
 
-Context:
+    def _detect_query_intent(self, query: str) -> str:
+        """
+        Detect the intent/type of query to guide response style.
+        Returns one of: 'factual', 'explanatory', 'comparative', 'procedural',
+                        'analytical', 'conversational', 'creative', 'debugging'
+        """
+        q = query.lower().strip()
+
+        # Conversational / greeting
+        conversational_patterns = [
+            "hi", "hello", "hey", "how are you", "what's up", "who are you",
+            "what can you do", "thanks", "thank you", "bye", "goodbye"
+        ]
+        if any(q.startswith(p) or q == p for p in conversational_patterns):
+            return "conversational"
+
+        # Debugging / error fixing
+        if any(kw in q for kw in ["error", "bug", "fix", "debug", "exception", "traceback", "why is this failing", "not working", "crash"]):
+            return "debugging"
+
+        # Procedural / how-to
+        if any(kw in q for kw in ["how to", "how do i", "steps to", "guide", "tutorial", "walk me through", "set up", "install", "configure", "implement"]):
+            return "procedural"
+
+        # Comparative
+        if any(kw in q for kw in ["vs", "versus", "compare", "difference between", "better than", "pros and cons", "which is", "similarities"]):
+            return "comparative"
+
+        # Analytical / opinion
+        if any(kw in q for kw in ["why", "analyze", "explain why", "reason", "impact", "effect", "opinion", "thoughts on", "evaluate", "assess", "implications"]):
+            return "analytical"
+
+        # Creative
+        if any(kw in q for kw in ["write", "generate", "create", "draft", "poem", "story", "essay", "summarize", "rewrite", "paraphrase"]):
+            return "creative"
+
+        # Explanatory
+        if any(kw in q for kw in ["what is", "what are", "explain", "describe", "tell me about", "define", "meaning of"]):
+            return "explanatory"
+
+        # Factual / data lookup
+        if any(kw in q for kw in ["when", "where", "who", "which", "how many", "how much", "list", "name", "give me"]):
+            return "factual"
+
+        return "explanatory"  # Safe default
+
+    def _build_system_prompt(self, query: str, intent: str) -> str:
+        """
+        Build a dynamic, intent-aware system prompt that produces
+        natural, context-appropriate responses — like ChatGPT or Perplexity.
+        """
+
+        # ── Core identity and philosophy (always present) ──────────────────────
+        base = """You are Albot, a highly capable AI assistant — precise, direct, and genuinely helpful. You adapt your communication style to the nature of each question: concise and sharp for simple queries, structured and thorough for complex ones.
+
+## Core Principles
+
+- **Be direct.** Get to the answer immediately. Don't open with filler phrases like "Certainly!", "Great question!", "Of course!", "Sure!", or "Absolutely!".
+- **Match depth to complexity.** A yes/no question gets a short answer. A multi-faceted technical question gets a well-structured, in-depth response.
+- **Ground everything in the provided context.** Never fabricate facts, statistics, names, or dates. If the context doesn't contain the answer, say so clearly and concisely.
+- **Think, then write.** Your responses should feel like they come from someone who understood the question deeply, not from someone template-filling.
+- **No sycophancy.** Never tell the user their question is good, interesting, or great. Just answer it."""
+
+        # ── Intent-specific formatting and tone guidelines ──────────────────────
+        intent_guides = {
+
+            "conversational": """
+## Response Style: Conversational
+- Reply naturally, like a smart colleague in a chat. Short, warm, and direct.
+- No headers, no bullet lists, no bold unless it genuinely helps.
+- If the user greets you, greet back and offer to help. One or two sentences max.
+- Match the user's energy and brevity.""",
+
+            "factual": """
+## Response Style: Factual / Direct Answer
+- Lead immediately with the answer — the most important fact first.
+- Keep it concise. A sentence or short paragraph is usually enough.
+- Add brief supporting context only if it meaningfully helps understanding.
+- Use a list only if multiple distinct items are being enumerated.
+- No unnecessary preamble, no restating the question.""",
+
+            "explanatory": """
+## Response Style: Explanation
+- Open with a single clear, jargon-free sentence that directly answers the question.
+- Then build depth progressively: what it is → how it works → why it matters.
+- Use **bold** for key terms when you first introduce them.
+- Use short paragraphs (3–5 sentences). Avoid walls of text.
+- Use a bullet list or numbered list only if breaking things into distinct points genuinely aids clarity (e.g., listing components, types, or properties).
+- No artificial headers like "Introduction" or "Conclusion." Use headers only if the explanation covers multiple distinct major sections.""",
+
+            "procedural": """
+## Response Style: Step-by-Step Guide
+- Start with one sentence stating what the steps will accomplish.
+- Use a **numbered list** for the steps. Each step should be an action.
+- Keep step descriptions tight: verb-first, specific, actionable (e.g., "Run `pip install X`", not "You should probably install X").
+- Use inline code formatting (backticks) for all commands, file names, and code values.
+- Use code blocks for multi-line code or config snippets.
+- Add a short "Prerequisites" note at the top only if truly necessary.
+- Omit filler steps like "Open your terminal" unless the audience is explicitly a beginner.""",
+
+            "comparative": """
+## Response Style: Comparison
+- Don't open with a lengthy disclaimer. State the core difference in the first sentence.
+- Structure the comparison logically: shared context → key differences → when to use which.
+- A comparison table is excellent for side-by-side attribute comparisons — use it when there are 3+ attributes being compared.
+- After the table or list, add a brief "When to choose X vs Y" paragraph to give actionable guidance.
+- Avoid false balance. If one option is clearly better for a specific use case, say so directly.""",
+
+            "analytical": """
+## Response Style: Analysis
+- Open with your direct assessment or answer — don't bury the lede.
+- Develop your reasoning in clear paragraphs. Show cause-and-effect relationships.
+- Use **bold** to highlight key claims or important distinctions.
+- If there are multiple perspectives or competing factors, address them honestly without false equivalence.
+- Conclude with a synthesized takeaway that follows logically from the analysis.""",
+
+            "debugging": """
+## Response Style: Debugging / Problem Solving
+- Identify the likely root cause first, in plain language.
+- Provide the corrected code or fix immediately after. Use a code block.
+- Briefly explain *why* this fixes the issue (one or two sentences is enough).
+- If there are multiple possible causes, list them in order of likelihood.
+- Don't explain concepts the user clearly already knows. Stay focused on the problem.""",
+
+            "creative": """
+## Response Style: Creative / Generative
+- Deliver the requested content directly. Don't preface with "Here is the text you asked for."
+- Match the tone and style implied by the request (formal, casual, technical, poetic, etc.).
+- For summaries: be concise. Capture the essential meaning, not every detail.
+- For written content: be specific and vivid. Avoid generic, padded language.
+- Only use structure (headers, bullets) if the content type calls for it.""",
+        }
+
+        # ── Shared output quality rules (always appended) ──────────────────────
+        output_rules = """
+## Output Quality Rules
+
+**Formatting:**
+- Use `##` headers only for responses covering multiple major sections (4+ distinct topics). Not for short answers.
+- Use **bold** for genuinely important terms and key takeaways — sparingly (not every other sentence).
+- Use bullet or numbered lists when presenting 3+ discrete items, steps, or options. Not for flowing prose.
+- Use code blocks (``` ```) for all code, commands, terminal output, config, and file paths.
+- Leave a blank line between paragraphs and between Markdown blocks for visual breathing room.
+
+**Content:**
+- Never pad the response with restated context ("Based on the provided context, it appears that...") or meta-commentary ("This is a complex topic...").
+- Never end with "I hope this helps!" or similar.
+- If the context is insufficient or missing a key fact, state this plainly: "The available information doesn't cover X specifically."
+- If the question is ambiguous, answer the most likely interpretation and briefly note the ambiguity.
+- Cite nothing inline. The system displays sources separately."""
+
+        intent_section = intent_guides.get(intent, intent_guides["explanatory"])
+        return base + "\n\n" + intent_section + "\n\n" + output_rules
+
+    def _build_user_prompt(self, query: str, evidence: str, intent: str) -> str:
+        """
+        Build a clean, intent-aware user prompt.
+        """
+        intent_instructions = {
+            "conversational": "Respond naturally and briefly.",
+            "factual": "Answer directly and concisely. Lead with the fact.",
+            "explanatory": "Explain clearly. Build from fundamentals to depth.",
+            "procedural": "Provide clear, numbered steps. Use code blocks for commands.",
+            "comparative": "Highlight key differences. Be direct about trade-offs.",
+            "analytical": "Analyze the topic. Support claims with reasoning from the context.",
+            "debugging": "Identify the root cause. Provide a working fix with a brief explanation.",
+            "creative": "Generate the requested content directly, matching the implied tone and style.",
+        }
+
+        instruction = intent_instructions.get(intent, "Answer the question clearly and accurately.")
+
+        return f"""Context:
 {evidence}
 
-Question: {query}
+User question: {query}
 
-Provide a comprehensive response that synthesizes the information naturally:"""
-        
+Instruction: {instruction}
+
+Answer:"""
+
+    def _synthesize_answer(self, query: str, evidence: str) -> str:
+        """Use LLM to synthesize final answer from local knowledge base context."""
+
+        intent = self._detect_query_intent(query)
+        system_prompt = self._build_system_prompt(query, intent)
+        user_prompt = self._build_user_prompt(query, evidence, intent)
+
         messages = [
             {
                 "role": "user",
@@ -513,8 +692,8 @@ Provide a comprehensive response that synthesizes the information naturally:"""
             response = self.llm_router.complete(
                 messages=messages,
                 system_prompt=system_prompt,
-                max_tokens=1300,
-                temperature=0.5
+                max_tokens=1500,
+                temperature=0.4
             )
             return response
         except Exception as e:
@@ -566,28 +745,22 @@ Provide a comprehensive response that synthesizes the information naturally:"""
 
     def _synthesize_with_web_context(self, query: str, evidence: str) -> str:
         """Synthesize answer using web search context."""
-        
-        system_prompt = """You are Albot, an advanced AI assistant with real-time web access and research capabilities.
 
-RESPONSE PHILOSOPHY:
-Your goal is to provide comprehensive, accurate answers by synthesizing information from multiple web sources into a coherent narrative. Present knowledge naturally without excessive attribution that disrupts reading flow.
+        intent = self._detect_query_intent(query)
 
-FORMATTING RULES:
-1. **Professional Structure**: Use **Markdown headers (## and ###)** to organize the answer into logical sections. Avoid long, unbroken walls of text.
-2. **Strategic Bolding**: Use **bold text** to highlight key terms, critical facts, and core concepts.
-3. **Lists for Clusters**: When presenting multiple features, advantages, or categories, use bulleted or numbered lists.
-4. **Rich Synthesis**: Synthesize information across sources to provide a unified, deep explanation rather than a list of "according to X..." summaries.
-5. **No Citations**: Do NOT use citation markers (e.g., [1], [2], (Source: X)) in the response text.
-6. **No Ending Sections**: Do NOT add "Sources", "References", or "Further Reading" at the end of the response. The system displays them separately."""
+        system_prompt = self._build_system_prompt(query, intent) + """
 
-        user_prompt = f"""Synthesize a comprehensive answer for the following query based on the provided web evidence.
-        
-Query: {query}
+## Web Search Context — Additional Rules
 
-Evidence:
-{evidence}
+You have access to real-time web search results combined with local knowledge. Apply these rules on top of your standard guidelines:
 
-Answer in a well-structured, professional Markdown format:"""
+- **Recency first.** When sources conflict, prefer the most recent information.
+- **Synthesize, don't aggregate.** Don't write "According to site A... and according to site B...". Weave information into a unified answer.
+- **No inline citations.** The system renders source links separately. Do not add [1], [Source: X], or similar markers.
+- **Flag genuine uncertainty.** If sources conflict on a key fact and you can't resolve it, acknowledge the disagreement briefly.
+- **Prioritize authoritative sources.** Official documentation, primary sources, and reputable publications take precedence over aggregator content."""
+
+        user_prompt = self._build_user_prompt(query, evidence, intent)
 
         messages = [
             {"role": "user", "content": user_prompt}
@@ -598,7 +771,7 @@ Answer in a well-structured, professional Markdown format:"""
                 messages=messages,
                 system_prompt=system_prompt,
                 max_tokens=1500,
-                temperature=0.6  # Slightly higher for creative synthesis of web results
+                temperature=0.4
             )
             return response
         except Exception as e:
@@ -609,24 +782,31 @@ Answer in a well-structured, professional Markdown format:"""
         """Generate a short title for the chat using LLM"""
         try:
             logger.info(f"Generating title for chat {chat_id}...")
-            system_prompt = "You are a helpful assistant. Generate a 3 to 4 word title for a conversation based on the user prompt and your response. Do not use quotes. Just the word."
+
+            system_prompt = (
+                "Generate a concise 3–5 word title that captures the topic of the conversation. "
+                "Use title case. No punctuation. No quotes. Return only the title, nothing else."
+            )
             
             messages = [
                 {
                     "role": "user", 
-                    "content": f"User: {query}\nAssistant: {answer}\nTitle:"
+                    "content": (
+                        f"User message: {query[:200]}\n"
+                        f"Assistant response (first 200 chars): {answer[:200]}\n\n"
+                        "Title:"
+                    )
                 }
             ]
             
-            # Use a fast model if possible, or default
             response = self.llm_router.complete(
                 messages=messages,
                 system_prompt=system_prompt,
                 max_tokens=20,
-                temperature=0.7
+                temperature=0.5
             )
             
-            clean_title = response.strip().strip('"')
+            clean_title = response.strip().strip('"').strip("'")
             self.chat_storage.rename_chat(chat_id, clean_title)
             logger.info(f"Auto-titled chat {chat_id} -> '{clean_title}'")
             return clean_title
