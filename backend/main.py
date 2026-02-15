@@ -356,6 +356,112 @@ async def clear_chat_history(chat_id: str):
 # Since we are moving to multi-chat, we should encourage using /chats/{id}/history.
 
 
+# --- Memory System Endpoints ---
+
+class SessionMemoryConfigRequest(BaseModel):
+    active_namespaces: List[str] = ["global"]
+    source_filters: List[str] = []
+    include_web_history: bool = True
+    include_fragments: bool = True
+
+class CombineSessionsRequest(BaseModel):
+    source_session_ids: List[str]
+    target_namespace: str
+    selected_fragment_ids: Optional[List[str]] = None
+
+@app.get("/memory/{chat_id}/config")
+async def get_memory_config(chat_id: str):
+    """Get memory configuration for a chat session"""
+    try:
+        config = rag_system.memory.get_session_config(chat_id)
+        return config.model_dump() if config else {}
+    except Exception as e:
+        logger.error(f"Failed to get memory config: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/memory/{chat_id}/config")
+async def set_memory_config(chat_id: str, request: SessionMemoryConfigRequest):
+    """Update memory configuration for a chat session"""
+    try:
+        from backend.models.memory import SessionMemoryConfig
+        from datetime import datetime
+        config = SessionMemoryConfig(
+            session_id=chat_id,
+            active_namespaces=request.active_namespaces,
+            source_filters=request.source_filters,
+            include_web_history=request.include_web_history,
+            include_fragments=request.include_fragments,
+            updated_at=datetime.utcnow().isoformat()
+        )
+        rag_system.memory.set_session_config(config)
+        return {"status": "success"}
+    except Exception as e:
+        logger.error(f"Failed to set memory config: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/memory/{chat_id}/traces")
+async def get_reasoning_traces(chat_id: str):
+    """Get all reasoning traces for a chat session"""
+    try:
+        traces = rag_system.memory.get_traces(chat_id)
+        return {"traces": traces}
+    except Exception as e:
+        logger.error(f"Failed to get reasoning traces: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/memory/{chat_id}/fragments")
+async def get_session_fragments(chat_id: str):
+    """Get all memory fragments for a chat session"""
+    try:
+        fragments = rag_system.memory.get_session_fragments(chat_id)
+        return {"fragments": fragments}
+    except Exception as e:
+        logger.error(f"Failed to get session fragments: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/memory/{chat_id}/web-history")
+async def get_web_history(chat_id: str):
+    """Get web interaction logs for a chat session"""
+    try:
+        logs = rag_system.memory.get_web_history(chat_id)
+        return {"web_interactions": logs}
+    except Exception as e:
+        logger.error(f"Failed to get web history: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/memory/fragments/{fragment_id}")
+async def delete_memory_fragment(fragment_id: str):
+    """Delete a specific memory fragment"""
+    try:
+        rag_system.memory.delete_fragment(fragment_id)
+        return {"status": "success"}
+    except Exception as e:
+        logger.error(f"Failed to delete memory fragment: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/memory/combine")
+async def combine_sessions(request: CombineSessionsRequest):
+    """Combine memories from multiple sessions into a target namespace"""
+    try:
+        count = rag_system.memory.combine_sessions(
+            source_session_ids=request.source_session_ids,
+            target_namespace=request.target_namespace,
+            user_selected_fragment_ids=request.selected_fragment_ids
+        )
+        return {"status": "success", "fragments_copied": count}
+    except Exception as e:
+        logger.error(f"Failed to combine sessions: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/memory/namespaces")
+async def get_namespaces(session_id: Optional[str] = None):
+    """Get available memory namespaces and fragment counts"""
+    try:
+        namespaces = rag_system.namespace_resolver.get_available_namespaces(session_id)
+        return {"namespaces": namespaces}
+    except Exception as e:
+        logger.error(f"Failed to get namespaces: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":

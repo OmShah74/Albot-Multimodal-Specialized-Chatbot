@@ -60,7 +60,8 @@ class AdvancedRetrievalEngine:
         self,
         query_decomposition: QueryDecomposition,
         query_text: str,
-        config: Dict = None
+        config: Dict = None,
+        source_filters: list = None
     ) -> tuple:
         """
         Main retrieval pipeline with configurable algorithms.
@@ -70,6 +71,10 @@ class AdvancedRetrievalEngine:
         Config options:
         - mode: "fast" (Vector+Graph) or "advanced" (all algorithms)
         - use_vector, use_graph, use_bm25, use_pagerank, use_structural, use_mmr
+        
+        Args:
+            source_filters: Optional list of source filenames to restrict retrieval to.
+                            When provided, only KB atoms whose source matches are included.
         """
         import time
         

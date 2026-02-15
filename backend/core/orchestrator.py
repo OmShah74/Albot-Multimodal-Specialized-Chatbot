@@ -12,6 +12,7 @@ from backend.models.config import (
     SearchConfig, KnowledgeAtom, QueryDecomposition,
     Modality
 )
+from backend.models.memory import ReasoningTrace, MemoryFragment
 from backend.core.storage.arango_manager import ArangoStorageManager
 from backend.core.storage.sqlite_manager import SQLiteStorageManager # Added SQLite
 from backend.core.vectorization.embedding_engine import VectorizationEngine
@@ -20,6 +21,9 @@ from backend.core.retrieval.retrieval_engine import AdvancedRetrievalEngine
 from backend.core.llm.llm_router import LLMRouter
 from backend.core.ingestion.multimodal_processor import MultimodalProcessor
 from backend.core.web_search.web_search_engine import WebSearchEngine
+from backend.core.memory.memory_manager import MemoryManager
+from backend.core.memory.fragment_extractor import FragmentExtractor
+from backend.core.memory.namespace_resolver import NamespaceResolver
 
 
 class RAGOrchestrator:
@@ -83,13 +87,18 @@ class RAGOrchestrator:
         # Web Search
         self.web_search = WebSearchEngine()
         
+        # Memory System
+        self.memory = MemoryManager(self.chat_storage, self.storage, self.vectorizer)
+        self.fragment_extractor = FragmentExtractor(self.llm_router)
+        self.namespace_resolver = NamespaceResolver(self.memory)
+        
         # Cancellation tracking
         self._cancelled_chats: set = set()
         
         # Load persistent API keys
         self._load_persistent_keys()
         
-        logger.info("RAG system initialized successfully")
+        logger.info("RAG system initialized successfully (with memory system)")
     
     def cancel_query(self, chat_id: str):
         """Mark a chat's query as cancelled"""
@@ -276,10 +285,27 @@ class RAGOrchestrator:
         # Step 1: Query decomposition
         query_decomp = self._decompose_query(query_text, query_modalities)
         
+        # Step 1.5: Resolve namespace scope for retrieval
+        retrieval_scope = self.namespace_resolver.resolve(chat_id)
+        
         # Step 2: Retrieval with config and timing (SAME algorithms for both modes)
         retrieval_start = time.time()
-        results, retrieval_metrics = self.retriever.retrieve(query_decomp, query_text, config)
+        results, retrieval_metrics = self.retriever.retrieve(
+            query_decomp, query_text, config,
+            source_filters=retrieval_scope.source_filters if retrieval_scope.source_filters else None
+        )
         retrieval_time = (time.time() - retrieval_start) * 1000
+        
+        # Step 2.5: Augment with memory fragments if enabled
+        memory_fragments_used = []
+        if retrieval_scope.include_fragments:
+            try:
+                memory_results = self.memory.search_fragments(
+                    query_text, retrieval_scope.active_namespaces, top_k=3
+                )
+                memory_fragments_used = memory_results
+            except Exception as mem_err:
+                logger.warning(f"Memory fragment search failed (non-fatal): {mem_err}")
         
         # Cancellation checkpoint 2: After retrieval
         if self.is_cancelled(chat_id):
@@ -414,6 +440,59 @@ class RAGOrchestrator:
         )
         
         new_title = self._generate_chat_title(chat_id, query_text, answer)
+        
+        # ── Memory System: Post-synthesis processing ──────────
+        try:
+            import uuid
+            turn_index = self.memory.get_turn_count(chat_id)
+            
+            # Log reasoning trace
+            trace = ReasoningTrace(
+                trace_id=str(uuid.uuid4()),
+                session_id=chat_id,
+                turn_index=turn_index,
+                user_query=query_text,
+                reformulated_query=query_decomp.reformulated_query if hasattr(query_decomp, 'reformulated_query') else None,
+                retrieved_doc_ids=[getattr(r, 'atom_id', '') for r in results] if results else [],
+                retrieved_doc_sources=list(set(s for s in sources if s)),
+                retrieval_scores={getattr(r, 'atom_id', ''): getattr(r, 'score', 0.0) for r in results} if results else {},
+                algorithms_used=retrieval_metrics.get("algorithms_used", []),
+                web_search_triggered=web_search_used,
+                web_urls_searched=[r.url for r in (web_results if web_search_used and 'web_results' in dir() else []) if hasattr(r, 'url')],
+                web_snippets=[],
+                search_mode=search_mode,
+                synthesis_model="",
+                answer_summary=answer[:300] if answer else "",
+                total_time_ms=round(total_time, 1),
+                created_at=__import__('datetime').datetime.utcnow().isoformat()
+            )
+            self.memory.log_reasoning_trace(trace)
+            
+            # Log web interactions if any occurred
+            if web_search_used and 'web_results' in dir() and web_results:
+                self.memory.log_web_interactions(
+                    session_id=chat_id,
+                    turn_index=turn_index,
+                    query=query_text,
+                    results=web_results
+                )
+            
+            # Extract and store memory fragments (non-blocking)
+            try:
+                fragments = self.fragment_extractor.extract(
+                    query=query_text,
+                    answer=answer,
+                    sources=sources,
+                    session_id=chat_id
+                )
+                for frag in fragments:
+                    related_ids = [getattr(r, 'atom_id', '') for r in results[:5]] if results else []
+                    self.memory.store_fragment(frag, related_doc_ids=related_ids)
+            except Exception as frag_err:
+                logger.warning(f"Fragment extraction failed (non-fatal): {frag_err}")
+                
+        except Exception as mem_err:
+            logger.warning(f"Memory post-processing failed (non-fatal): {mem_err}")
         
         return {
             "answer": answer,

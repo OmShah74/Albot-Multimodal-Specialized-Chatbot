@@ -99,6 +99,22 @@ class ArangoStorageManager:
             logger.info("Created collection: conversation_history")
         else:
             self.history_collection = self.db.collection("conversation_history")
+
+        # ── Memory system collections ──────────────────────
+
+        # Memory fragments vertex collection (for semantic search)
+        if not self.db.has_collection("memory_fragments"):
+            self.memory_fragments_collection = self.db.create_collection("memory_fragments")
+            logger.info("Created collection: memory_fragments")
+        else:
+            self.memory_fragments_collection = self.db.collection("memory_fragments")
+
+        # Memory edges (fragments ↔ sessions, fragments ↔ KB atoms, fragments ↔ fragments)
+        if not self.db.has_collection("memory_edges"):
+            self.memory_edges_collection = self.db.create_collection("memory_edges", edge=True)
+            logger.info("Created edge collection: memory_edges")
+        else:
+            self.memory_edges_collection = self.db.collection("memory_edges")
     
     def _initialize_graph(self):
         """Create graph if it doesn't exist"""
@@ -120,6 +136,27 @@ class ArangoStorageManager:
             logger.info(f"Created graph: {self.config.graph_name}")
         else:
             self.graph = self.db.graph(self.config.graph_name)
+
+        # ── Memory graph ────────────────────────────────
+        memory_graph_name = f"{self.config.graph_name}_memory"
+        if not self.db.has_graph(memory_graph_name):
+            self.memory_graph = self.db.create_graph(memory_graph_name)
+
+            # Memory fragments as vertex collection
+            if not self.memory_graph.has_vertex_collection("memory_fragments"):
+                self.memory_graph.create_vertex_collection("memory_fragments")
+
+            # Memory edges connect memory_fragments to KB nodes and to each other
+            if not self.memory_graph.has_edge_definition("memory_edges"):
+                self.memory_graph.create_edge_definition(
+                    edge_collection="memory_edges",
+                    from_vertex_collections=["memory_fragments", self.config.nodes_collection],
+                    to_vertex_collections=["memory_fragments", self.config.nodes_collection]
+                )
+
+            logger.info(f"Created memory graph: {memory_graph_name}")
+        else:
+            self.memory_graph = self.db.graph(memory_graph_name)
     
     def _create_indexes(self):
         """Create necessary indexes for performance"""
@@ -639,3 +676,192 @@ class ArangoStorageManager:
             logger.info("Chat history cleared")
         except Exception as e:
             logger.error(f"Failed to clear chat history: {e}")
+
+    # ═══════════════════════════════════════════════════
+    # Memory Fragment Methods (ArangoDB)
+    # ═══════════════════════════════════════════════════
+
+    def insert_memory_fragment(self, fragment_data: Dict) -> str:
+        """
+        Insert a memory fragment into ArangoDB with its embedding.
+        Creates edges to related KB atoms if doc_ids are provided.
+        Returns the ArangoDB document _key.
+        """
+        try:
+            doc = {
+                "_key": fragment_data["fragment_id"],
+                "session_id": fragment_data["session_id"],
+                "fragment_type": fragment_data["fragment_type"],
+                "content": fragment_data["content"],
+                "tags": fragment_data.get("tags", []),
+                "namespace": fragment_data.get("namespace", "global"),
+                "embedding": fragment_data.get("embedding", []),
+                "importance_score": fragment_data.get("importance_score", 0.5),
+                "created_at": fragment_data.get("created_at", ""),
+            }
+            result = self.memory_fragments_collection.insert(doc)
+            frag_id = result["_key"]
+            logger.info(f"Inserted memory fragment {frag_id}")
+
+            # Create edges to related KB atoms if provided
+            related_doc_ids = fragment_data.get("related_doc_ids", [])
+            for doc_id in related_doc_ids:
+                try:
+                    edge = {
+                        "_from": f"memory_fragments/{frag_id}",
+                        "_to": f"{self.config.nodes_collection}/{doc_id}",
+                        "relation": "extracted_from",
+                        "weight": 1.0
+                    }
+                    self.memory_edges_collection.insert(edge)
+                except Exception as edge_err:
+                    logger.warning(f"Failed to create edge to {doc_id}: {edge_err}")
+
+            return frag_id
+        except Exception as e:
+            logger.error(f"Failed to insert memory fragment: {e}")
+            return ""
+
+    def search_memory_fragments(
+        self,
+        query_embedding: List[float],
+        namespace_filter: List[str] = None,
+        top_k: int = 5
+    ) -> List[Dict]:
+        """
+        Vector similarity search over memory fragments, scoped by namespace.
+        Uses cosine similarity identical to the existing vector_similarity_search.
+        """
+        try:
+            ns_filter = ""
+            bind_vars = {
+                "query_emb": query_embedding,
+                "top_k": top_k
+            }
+            if namespace_filter:
+                ns_filter = "FILTER doc.namespace IN @namespaces"
+                bind_vars["namespaces"] = namespace_filter
+
+            aql = f"""
+            FOR doc IN memory_fragments
+                {ns_filter}
+                LET embedding = doc.embedding
+                FILTER LENGTH(embedding) > 0
+                LET dotProduct = SUM(
+                    FOR i IN 0..LENGTH(@query_emb)-1
+                        RETURN embedding[i] * @query_emb[i]
+                )
+                LET norm1 = SQRT(SUM(
+                    FOR v IN embedding RETURN v * v
+                ))
+                LET norm2 = SQRT(SUM(
+                    FOR v IN @query_emb RETURN v * v
+                ))
+                LET similarity = norm1 > 0 AND norm2 > 0
+                    ? dotProduct / (norm1 * norm2) : 0
+                SORT similarity DESC
+                LIMIT @top_k
+                RETURN {{
+                    fragment_id: doc._key,
+                    session_id: doc.session_id,
+                    fragment_type: doc.fragment_type,
+                    content: doc.content,
+                    tags: doc.tags,
+                    namespace: doc.namespace,
+                    importance_score: doc.importance_score,
+                    similarity: similarity
+                }}
+            """
+            cursor = self.db.aql.execute(aql, bind_vars=bind_vars)
+            results = list(cursor)
+            logger.debug(f"Memory fragment search returned {len(results)} results")
+            return results
+        except Exception as e:
+            logger.error(f"Memory fragment search failed: {e}")
+            return []
+
+    def delete_memory_fragments_by_session(self, session_id: str):
+        """Delete all memory fragments and their edges for a session"""
+        try:
+            # First get all fragment keys for this session
+            aql_keys = """
+            FOR doc IN memory_fragments
+                FILTER doc.session_id == @session_id
+                RETURN doc._key
+            """
+            keys = list(self.db.aql.execute(aql_keys, bind_vars={"session_id": session_id}))
+
+            if keys:
+                # Delete edges connected to these fragments
+                for key in keys:
+                    frag_full_id = f"memory_fragments/{key}"
+                    edge_aql = """
+                    FOR e IN memory_edges
+                        FILTER e._from == @fid OR e._to == @fid
+                        REMOVE e IN memory_edges
+                    """
+                    self.db.aql.execute(edge_aql, bind_vars={"fid": frag_full_id})
+
+                # Delete the fragments themselves
+                del_aql = """
+                FOR doc IN memory_fragments
+                    FILTER doc.session_id == @session_id
+                    REMOVE doc IN memory_fragments
+                """
+                self.db.aql.execute(del_aql, bind_vars={"session_id": session_id})
+
+            logger.info(f"Deleted {len(keys)} memory fragments for session {session_id}")
+        except Exception as e:
+            logger.error(f"Failed to delete memory fragments for session {session_id}: {e}")
+
+    def delete_single_memory_fragment(self, fragment_id: str):
+        """Delete a single memory fragment and its edges"""
+        try:
+            frag_full_id = f"memory_fragments/{fragment_id}"
+            # Remove edges
+            edge_aql = """
+            FOR e IN memory_edges
+                FILTER e._from == @fid OR e._to == @fid
+                REMOVE e IN memory_edges
+            """
+            self.db.aql.execute(edge_aql, bind_vars={"fid": frag_full_id})
+            # Remove fragment
+            self.memory_fragments_collection.delete(fragment_id)
+            logger.info(f"Deleted memory fragment {fragment_id}")
+        except Exception as e:
+            logger.error(f"Failed to delete memory fragment {fragment_id}: {e}")
+
+    def get_memory_fragment_graph(self, session_id: str) -> Dict:
+        """Get the fragment subgraph for a session (fragments + edges)"""
+        try:
+            aql = """
+            LET frags = (
+                FOR doc IN memory_fragments
+                    FILTER doc.session_id == @session_id
+                    RETURN {
+                        id: doc._key,
+                        type: doc.fragment_type,
+                        content: doc.content,
+                        tags: doc.tags,
+                        importance: doc.importance_score
+                    }
+            )
+            LET frag_ids = (FOR f IN frags RETURN CONCAT("memory_fragments/", f.id))
+            LET edges = (
+                FOR e IN memory_edges
+                    FILTER e._from IN frag_ids OR e._to IN frag_ids
+                    RETURN {
+                        from_id: e._from,
+                        to_id: e._to,
+                        relation: e.relation,
+                        weight: e.weight
+                    }
+            )
+            RETURN { fragments: frags, edges: edges }
+            """
+            cursor = self.db.aql.execute(aql, bind_vars={"session_id": session_id})
+            result = list(cursor)
+            return result[0] if result else {"fragments": [], "edges": []}
+        except Exception as e:
+            logger.error(f"Failed to get memory graph for session {session_id}: {e}")
+            return {"fragments": [], "edges": []}
