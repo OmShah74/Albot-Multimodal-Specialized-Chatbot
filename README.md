@@ -38,12 +38,20 @@
 - **Adaptive Reasoning**: Implements **Personalized PageRank (PPR)** and **Bayesian Weight Optimization** to dynamically adjust retrieval strategies based on query complexity.
 - **Multi-LLM Routing**: Smart router supports OpenAI, Anthropic, Gemini, Groq, and OpenRouter with automatic fallback and rate limit handling.
 
-### 💾 Memory & Persistence
+### 💾 Advanced Memory System (New)
 
-- **Unified Knowledge Graph**: Stores entities and relationships in ArangoDB, linking cross-modal concepts (e.g., linking a video frame to a text paragraph).
-- **Persistent Conversation History**: Chat history is reliably stored in **SQLite**, ensuring context is preserved across page reloads and browser sessions.
-- **Multiple Chats**: Manage multiple concurrent chat sessions with auto-titling, renaming, and deletion capabilities.
-- **"Clear Chat" Functionality**: User-controlled session management to reset context when needed.
+- **Layered Cognitive Memory**: Implements a human-like memory architecture with **Working Memory** (Ephemeral), **Session Memory** (Contextual), and **Semantic Memory** (Long-term Knowledge).
+- **Reasoning Traces**: Logs detailed step-by-step reasoning chains for every response, allowing for introspection and debugging of the agent's thought process.
+- **Memory Fragments**: Automatically extracts and consolidates high-value knowledge (facts, user preferences, solutions) into a persistent graph, independent of specific chat sessions.
+- **Namespace Scoping**: Dynamic retrieval scopes allow users to partition memory (e.g., "Personal" vs. "Work" or "Coding" vs. "Writing") for context-aware interactions.
+- **Cross-Session Retrieval**: Knowledge learned in one conversation can be intuitively recalled in another.
+
+### 💬 Multi-Session Chat
+
+- **Concurrent Sessions**: Manage unlimited parallel conversations, each with its own isolated history and configuration.
+- **Auto-Titling**: Intelligent summarization automatically names new chats based on their content.
+- **Full Persistence**: All messages, traces, and memory artifacts are stored in **SQLite**, ensuring zero data loss across restarts.
+- **Granular Control**: Rename, delete, or clear history for individual sessions.
 
 ### 🌐 Connectivity
 
@@ -65,13 +73,23 @@ The system follows a microservices-inspired modular architecture:
 graph TD
     User[User / Frontend] -->|Query| API[FastAPI Backend]
     API --> Router{LLM Router}
-    API --> Retriever[Retrieval Engine]
+    API --> Orchestrator[RAG Orchestrator]
+
+    subgraph "Memory & Storage"
+        Orchestrator -->|Logs Traces & Msgs| SQLite[(SQLite)]
+        Orchestrator -->|Extracts Fragments| ArangoDB[(ArangoDB)]
+        SQLite <-->|Sync| MemoryManager[Memory Manager]
+        ArangoDB <-->|Sync| MemoryManager
+    end
 
     subgraph "Knowledge Core"
         Ingestion[Multimodal Processor] -->|Atoms| GraphBuilder
-        GraphBuilder -->|Edges & Nodes| DB[(ArangoDB)]
-        DB <-->|Vector + Graph| Retriever
+        GraphBuilder -->|Edges & Nodes| ArangoDB
+        ArangoDB <-->|Vector + Graph| Retriever[Retrieval Engine]
+        Retriever -->|Source Filters| MemoryManager
     end
+
+    Orchestrator --> Retriever
 
     subgraph "External Services"
         Router --> OpenAI
@@ -87,16 +105,16 @@ graph TD
 
 ### Backend
 
-| Component            | Technology             | Description                                     |
-| -------------------- | ---------------------- | ----------------------------------------------- |
-| **Framework**        | FastAPI                | High-performance async API                      |
-| **Database**         | ArangoDB               | Multi-model (Graph + Document + Search)         |
-| **Chat Storage**     | SQLite                 | Lightweight, file-based persistence for history |
-| **Vector Search**    | PyTorch + Transformers | E5-Large embeddings                             |
-| **Graph Algorithms** | NetworkX               | Centrality, PageRank, Community Detection       |
-| **Audio/Video**      | Whisper, MoviePy       | SOTA transcription and media processing         |
-| **Web Search**       | DuckDuckGo             | Private, non-tracking web search                |
-| **Task Queue**       | AsyncIO                | Non-blocking concurrency                        |
+| Component            | Technology             | Description                                 |
+| -------------------- | ---------------------- | ------------------------------------------- |
+| **Framework**        | FastAPI                | High-performance async API                  |
+| **Knowledge Graph**  | ArangoDB               | Multi-model (Graph + Document + Search)     |
+| **Memory Store**     | SQLite                 | Transactional storage for sessions & traces |
+| **Vector Search**    | PyTorch + Transformers | E5-Large embeddings                         |
+| **Graph Algorithms** | NetworkX               | Centrality, PageRank, Community Detection   |
+| **Audio/Video**      | Whisper, MoviePy       | SOTA transcription and media processing     |
+| **Web Search**       | DuckDuckGo             | Private, non-tracking web search            |
+| **Task Queue**       | AsyncIO                | Non-blocking concurrency                    |
 
 ### Frontend
 
@@ -216,8 +234,13 @@ _Note: API Keys for LLMs (OpenAI, Gemini, etc.) are managed via the Frontend UI 
     - View citations and source links in the response footer.
 
 3.  **Manage Conversations**:
-    - Your chat history is saved automatically.
-    - Click **"Clear Chat"** to wipe the current conversation context and start fresh.
+    - Create **New Chats** for different topics.
+    - Switch between sessions instantly via the sidebar.
+    - Rename or delete chats as needed.
+
+4.  **Memory Management** (New!):
+    - View the **"Reasoning Traces"** to see how the agent arrived at an answer.
+    - (Coming Soon) Configure memory namespaces to control what the agent "remembers" for specific contexts.
 
 ---
 
@@ -226,10 +249,11 @@ _Note: API Keys for LLMs (OpenAI, Gemini, etc.) are managed via the Frontend UI 
 The backend exposes a comprehensive REST API (documented via Swagger at `http://localhost:8010/docs`).
 
 - `POST /query`: Semantic search and answer generation.
+- `GET /chats`: List all active chat sessions.
+- `POST /chats`: Create a new session.
+- `GET /chats/{id}/history`: Retrieve message history.
+- `GET /memory/{id}/traces`: Retrieve reasoning traces.
 - `POST /ingest/file`: Upload and process a file.
-- `POST /ingest/url`: Scrape and process a webpage.
-- `GET /history`: Retrieve conversation history.
-- `DELETE /history`: Clear conversation history.
 - `GET /statistics`: View system performance metrics.
 
 ---
@@ -244,10 +268,15 @@ multimodal-rag-system/
 │   │   ├── vectorization/  # Embedding models
 │   │   ├── graph/          # Graph construction algorithms
 │   │   ├── retrieval/      # Hybrid search engine
+│   │   ├── memory/         # Advanced Memory System (New!)
+│   │   │   ├── memory_manager.py
+│   │   │   ├── fragment_extractor.py
+│   │   │   ├── memory_scorer.py
+│   │   │   └── namespace_resolver.py
 │   │   ├── web_search/     # DuckDuckGo integration
-│   │   └── storage/        # ArangoDB interface
-│   ├── models/             # Pydantic schemas
-│   └── main.py             # Entry point
+│   │   └── storage/        # Database Interfaces (ArangoDB + SQLite)
+│   ├── models/             # Pydantic schemas (Memory, Config, etc.)
+│   └── main.py             # Entry point & API routes
 ├── frontend/               # Next.js Application
 │   ├── app/                # App Router pages
 │   ├── components/         # Reusable UI components

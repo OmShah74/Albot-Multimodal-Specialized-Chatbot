@@ -62,22 +62,31 @@ This is a **production-ready** implementation of the advanced multimodal RAG sys
    - Query decomposition
    - Evidence formatting
    - Answer synthesis
+   - **Reasoning Trace Logging**
+   - **Memory Fragment Extraction**
 
-8. **✅ FastAPI Backend** (`backend/main.py`)
+8. **✅ Advanced Memory System** (`backend/core/memory/`)
+   - **Memory Manager**: Coordinator for split-storage (SQLite + ArangoDB)
+   - **Fragment Extractor**: LLM-based knowledge distillation
+   - **Memory Scorer**: Bayesian importance weighting with temporal decay
+   - **Namespace Resolver**: Context-aware retrieval scoping
+
+9. **✅ FastAPI Backend** (`backend/main.py`)
    - RESTful API
    - File upload endpoint
    - Query endpoint
    - API key management
    - Statistics endpoint
+   - **Memory Management Endpoints**
 
-9. **✅ Gradio Frontend** (`frontend/app.py`)
-   - Chat interface
-   - File upload
-   - API key management
-   - Statistics dashboard
-   - User-friendly UI
+10. **✅ Frontend** (`frontend/`)
+    - Chat interface with **Multi-Session Support**
+    - File upload
+    - API key management
+    - Statistics dashboard
+    - User-friendly UI
 
-10. **✅ Docker Deployment**
+11. **✅ Docker Deployment**
     - Complete docker-compose setup
     - ArangoDB container
     - Application container
@@ -97,8 +106,6 @@ This is a **production-ready** implementation of the advanced multimodal RAG sys
    ```
 
    - λ weights: fine=1.0, mid=0.85, coarse=0.65
-   - Cosine similarity
-   - Multi-modality support
 
 2. **Personalized PageRank**
 
@@ -106,14 +113,10 @@ This is a **production-ready** implementation of the advanced multimodal RAG sys
    π_{t+1} = α·π_0 + (1-α)·A·π_t
    ```
 
-   - Teleport vector (seed nodes)
-   - Iterative convergence
-   - Convergence detection
+   - Teleport vector (seed nodes) determined by vector search results.
 
 3. **BM25 Scoring**
-   - Full BM25Okapi implementation
-   - Normalized scores
-   - Term frequency weighting
+   - Full BM25Okapi implementation for lexical matching.
 
 4. **Structural Importance**
 
@@ -121,9 +124,7 @@ This is a **production-ready** implementation of the advanced multimodal RAG sys
    s_i^struct = η_1·C_d(v_i) + η_2·C_b(v_i)
    ```
 
-   - NetworkX for centrality
-   - Degree centrality
-   - Betweenness centrality
+   - Degree (C_d) and Betweenness (C_b) Centrality.
 
 5. **Unified Evidence Accumulation (WEA)**
 
@@ -131,40 +132,86 @@ This is a **production-ready** implementation of the advanced multimodal RAG sys
    S_i = α·s_i^vec + β·s_i^graph + γ·s_i^bm25 + δ·s_i^struct + ε·s_i^mod
    ```
 
-   - All five components
-   - Normalized weights (sum to 1)
-   - Modality alignment
-
 6. **Maximal Marginal Relevance (MMR)**
 
    ```
    max_A [Σ_{i∈A} S_i - λ Σ_{i,j∈A} cos(e_i, e_j)]
    ```
 
-   - Greedy selection
-   - Diversity penalty
-   - Configurable λ
+7. **Bayesian Memory Scoring** (New!)
 
-7. **Bayesian Weight Optimization**
+   Importance of a memory fragment `f` at time `t`:
 
    ```
-   max_θ E[M | θ]
+   I(f, t) = ω₁·freq(f) + ω₂·recency(f, t) + ω₃·relevance(f)
    ```
 
-   - Thompson Sampling
-   - Performance metrics tracking
-   - Adaptive updates
+   Where:
+   - `freq(f)`: Normalized access count (`count / max_count`)
+   - `recency(f)`: Exponential decay `e^(-λ · Δt)` (λ=0.01 per hour)
+   - `relevance(f)`: Initial LLM-assigned importance score
+   - `ω`: Weight vector (0.3, 0.4, 0.3)
 
-8. **Edge Weight Normalization**
+---
 
-   ```
-   ŵ_ij = (w_ij - μ) / σ
-   w̃_ij = σ(ŵ_ij)
-   ```
+## 🧠 Advanced Memory Architecture
 
-   - Z-score normalization
-   - Sigmoid squashing
-   - Per-type normalization
+The system uses a **Split-Storage Hybrid Architecture** to balance transactional reliability with semantic flexibility.
+
+```mermaid
+graph TD
+    subgraph "Working Memory"
+        Context[LLM Context Window]
+    end
+
+    subgraph "Session Memory (SQLite)"
+        Trace[Reasoning Traces]
+        Msgs[Chat Messages]
+        Config[Session Config]
+        Logs[Web Logs]
+    end
+
+    subgraph "Semantic Memory (ArangoDB)"
+        Frag[Memory Fragments]
+        Edges[Memory Edges]
+        Embed[Vector Embeddings]
+    end
+
+    Context <-->|Read/Write| Session Memory
+    Context <-->|Extract/Retrieve| Semantic Memory
+    Session Memory --"References"--> Semantic Memory
+```
+
+### 1. Data Models
+
+#### **Reasoning Trace** (SQLite)
+
+Captures the _process_ of answering, not just the result.
+
+- `turn_index`: Order in conversation
+- `retrieved_docs`: Atoms used
+- `web_search_results`: External data
+- `answer_summary`: Condensed output of thought process
+
+#### **Memory Fragment** (ArangoDB + SQLite)
+
+Atomic units of knowledge extracted from conversations.
+
+- `content`: "User prefers Python for backend code"
+- `fragment_type`: FACT | PREFERENCE | SOLUTION | ENTITY
+- `namespace`: Scoping tag (e.g., "coding", "personal")
+- `importance_score`: 0.0 - 1.0 (decays over time)
+
+### 2. Multi-Chat Schema (SQLite)
+
+| Table                   | Purpose                                                  |
+| ----------------------- | -------------------------------------------------------- |
+| `chats`                 | Session metadata (ID, Title, Namespace, Created/Updated) |
+| `messages`              | Raw conversation history (Role, Content, References)     |
+| `reasoning_traces`      | Structured logs of RAG pipeline execution per turn       |
+| `memory_fragments`      | Metadata for fragments (syncs with ArangoDB)             |
+| `session_memory_config` | Per-session settings (Active Namespaces, Filters)        |
+| `web_interaction_logs`  | Audit trail of external searches                         |
 
 ---
 
@@ -183,7 +230,9 @@ Graph Construction (Edges: structural, semantic, cross-modal)
     ↓
 ArangoDB (Unified storage)
     ↓
-Query → Retrieval Engine (Vector + Graph + BM25)
+Query → Namespace Resolver (Active Scopes)
+    ↓
+Retrieval Engine (Vector + Graph + BM25 + Memory)
     ↓
 Evidence Accumulation (WEA)
     ↓
@@ -192,16 +241,17 @@ Re-ranking (MMR)
 LLM Synthesis (Multi-provider)
     ↓
 Answer
+    ↓
+Post-Processing (Trace Logging + Fragment Extraction)
 ```
 
 ---
 
 ## 📁 Project Structure
 
-```
+```bash
 multimodal-rag-system/
 ├── backend/
-│   ├── api/
 │   ├── core/
 │   │   ├── ingestion/
 │   │   │   └── multimodal_processor.py
@@ -210,18 +260,26 @@ multimodal-rag-system/
 │   │   ├── graph/
 │   │   │   └── graph_builder.py
 │   │   ├── storage/
-│   │   │   └── arango_manager.py
+│   │   │   ├── arango_manager.py       # Graph DB Interface
+│   │   │   └── sqlite_manager.py       # Chat/Memory DB Interface
 │   │   ├── retrieval/
 │   │   │   └── retrieval_engine.py
+│   │   ├── memory/                     # NEW: Memory Module
+│   │   │   ├── memory_manager.py       # Central Coordinator
+│   │   │   ├── fragment_extractor.py   # LLM Extractor
+│   │   │   ├── memory_scorer.py        # Scoring Logic
+│   │   │   └── namespace_resolver.py   # Scope Management
 │   │   ├── llm/
 │   │   │   └── llm_router.py
 │   │   ├── web_search/
 │   │   │   └── search_manager.py
-│   │   └── orchestrator.py
+│   │   └── orchestrator.py             # Main Pipeline
 │   ├── models/
-│   │   └── config.py
-│   ├── utils/
-│   └── main.py (FastAPI)
+│   │   ├── config.py
+│   │   └── memory.py                   # Pydantic Models for Memory
+│   ├── scripts/
+│   │   └── verify_memory.py            # End-to-end verification
+│   └── main.py                         # FastAPI App
 ├── frontend/
 │   ├── app/
 │   ├── components/
@@ -234,6 +292,7 @@ multimodal-rag-system/
 ├── data/
 │   ├── uploads/
 │   ├── database/
+│   │   └── chat_history.db             # SQLite File
 │   ├── cache/
 │   └── models/
 ├── docker-compose.yml
@@ -251,60 +310,29 @@ multimodal-rag-system/
 
 ### Multimodal Support
 
-- ✅ Text (.txt, .md)
-- ✅ PDF (.pdf)
-- ✅ Images (.jpg, .png)
-- ✅ Audio (.mp3, .wav)
-- ✅ Video (.mp4) - with Whisper transcription
-- ✅ Tables (.csv, .xlsx)
-- ⚠️ URLs (stub - needs Playwright setup)
-- ⚠️ YouTube (stub - needs yt-dlp)
+- ✅ Text, PDF, Images, Audio, Video, CSV
 
 ### Advanced Retrieval
 
 - ✅ Multi-channel (Vector + Graph + BM25)
 - ✅ Personalized PageRank
-- ✅ k-NN graphs
-- ✅ Entity extraction
-- ✅ Cross-modal alignment
-- ✅ MMR re-ranking
 - ✅ Adaptive weights
+
+### Memory & Persistence (New!)
+
+- ✅ **Hybrid Storage**: SQLite for stability, ArangoDB for semantics.
+- ✅ **Reasoning Traces**: Full "thought process" logging.
+- ✅ **Auto-Consolidation**: Extracts facts/solutions automatically.
+- ✅ **Namespace Scoping**: Context-aware memory retrieval.
+- ✅ **Multi-Chat**: Parallel, persistent sessions.
 
 ### LLM Integration
 
-- ✅ Multi-provider (5 providers)
-- ✅ Multi-key per provider
-- ✅ Automatic fallback
-- ✅ Rate limit handling
-- ✅ Context overflow handling
-
-### Database
-
-- ✅ ArangoDB (vector + graph)
-- ✅ Native graph operations
-- ✅ Vector similarity
-- ✅ Full-text search
-- ✅ Batch operations
-
-### Chat History Storage
-
-- ✅ SQLite (Reliable file-based persistence)
-- ✅ Independent of Graph DB state
-
-### User Experience
-
-- ✅ Persistent Conversations
-- ✅ Integrated Web Search
-- ✅ "Clear Chat" Functionality
-- ✅ Real-time Token Streaming
+- ✅ Multi-provider, Fallback, Rate-limits
 
 ### Deployment
 
-- ✅ Docker containers
-- ✅ docker-compose orchestration
-- ✅ Volume mounting (local data)
-- ✅ GPU support (optional)
-- ✅ Health checks
+- ✅ Docker containers, local volumes, GPU support
 
 ---
 
@@ -350,16 +378,6 @@ docker-compose down -v
 docker-compose up --build
 ```
 
-# Start backend
-
-python backend/main.py &
-
-# Start frontend
-
-python frontend/app.py
-
-````
-
 ---
 
 ## ⚙️ Configuration
@@ -378,7 +396,7 @@ class RetrievalWeights:
     gamma: float = 0.2   # BM25
     delta: float = 0.15  # Structural
     epsilon: float = 0.1 # Modality
-````
+```
 
 ### Search Config
 
@@ -400,29 +418,25 @@ class SearchConfig:
 
 ```python
 from backend.core.orchestrator import RAGOrchestrator
-
 rag = RAGOrchestrator()
-result = rag.ingest_file("test.pdf")
-print(result)  # Shows atoms and edges created
+rag.ingest_file("test.pdf")
 ```
 
 ### Test Query
 
 ```python
-answer = rag.query("What is the main topic?")
-print(answer)
+rag.query("What is the main topic?")
 ```
 
-### Test Components
+### Verify Memory (New!)
 
 ```bash
-# Each component has unit tests (create if needed)
-python -m pytest tests/
+python backend/scripts/verify_memory.py
 ```
 
 ---
 
-## 📊 Performance
+## � Performance
 
 ### Expected Performance
 
@@ -466,14 +480,14 @@ rag.query("At what timestamp is concept X explained?")
 
 ---
 
-## 🔮 Future Enhancements
+## �🔮 Future Enhancements
 
 ### Suggested Improvements
 
 1. **Caching**: Add Redis for query caching
 2. **Async**: Make retrieval fully async
 3. **Monitoring**: Add Prometheus metrics
-4. **UI**: Add visualization of graph
+4. **UI**: Add Memory visualization (Graph View)
 5. **Search**: Add semantic web search
 6. **Optimization**: GPU-accelerated embeddings
 7. **Scale**: Kubernetes deployment
@@ -542,15 +556,16 @@ This is a **complete, working implementation** of your advanced multimodal RAG s
 - ✅ Multimodal ingestion
 - ✅ Vector + graph storage
 - ✅ All 8 retrieval algorithms
+- ✅ **Advanced Memory System (Session + Semantic)**
 - ✅ LLM orchestration
+- ✅ **Multi-Chat Interface**
 - ✅ Docker deployment
-- ✅ User interface
 
 **Ready to:**
 
 - Deploy with one command
 - Ingest any supported file type
-- Query with advanced retrieval
+- Query with context-aware memory
 - Scale to your needs
 
 **Next steps:**
