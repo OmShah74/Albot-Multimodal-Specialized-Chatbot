@@ -429,6 +429,16 @@ async def get_web_history(chat_id: str):
         logger.error(f"Failed to get web history: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/memory/{chat_id}/dump")
+async def get_memory_dump(chat_id: str):
+    """Get complete structured memory dump for a chat session (conversation, fragments, web logs, traces, stats)"""
+    try:
+        dump = rag_system.memory.get_full_memory_dump(chat_id)
+        return dump
+    except Exception as e:
+        logger.error(f"Failed to get memory dump: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.delete("/memory/fragments/{fragment_id}")
 async def delete_memory_fragment(fragment_id: str):
     """Delete a specific memory fragment"""

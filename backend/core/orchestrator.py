@@ -288,6 +288,15 @@ class RAGOrchestrator:
         # Step 1.5: Resolve namespace scope for retrieval
         retrieval_scope = self.namespace_resolver.resolve(chat_id)
         
+        # Step 1.6: Fetch full memory context (conversation history, fragments, web logs)
+        memory_context = ""
+        try:
+            memory_context = self.memory.get_full_memory_context(chat_id)
+            if memory_context:
+                logger.info(f"Loaded memory context ({len(memory_context)} chars) for chat {chat_id}")
+        except Exception as mem_ctx_err:
+            logger.warning(f"Failed to load memory context (non-fatal): {mem_ctx_err}")
+        
         # Step 2: Retrieval with config and timing (SAME algorithms for both modes)
         retrieval_start = time.time()
         results, retrieval_metrics = self.retriever.retrieve(
@@ -405,9 +414,9 @@ class RAGOrchestrator:
             return self._cancelled_response(chat_id, start_time, config, search_mode)
 
         if web_search_used:
-            answer = self._synthesize_with_web_context(query_text, evidence)
+            answer = self._synthesize_with_web_context(query_text, evidence, memory_context)
         else:
-            answer = self._synthesize_answer(query_text, evidence)
+            answer = self._synthesize_answer(query_text, evidence, memory_context)
         synthesis_time = (time.time() - synthesis_start) * 1000
         
         total_time = (time.time() - start_time) * 1000
@@ -727,9 +736,10 @@ class RAGOrchestrator:
         intent_section = intent_guides.get(intent, intent_guides["explanatory"])
         return base + "\n\n" + intent_section + "\n\n" + output_rules
 
-    def _build_user_prompt(self, query: str, evidence: str, intent: str) -> str:
+    def _build_user_prompt(self, query: str, evidence: str, intent: str, memory_context: str = "") -> str:
         """
         Build a clean, intent-aware user prompt.
+        Includes session memory (conversation history, fragments, web logs) when available.
         """
         intent_instructions = {
             "conversational": "Respond naturally and briefly.",
@@ -744,7 +754,14 @@ class RAGOrchestrator:
 
         instruction = intent_instructions.get(intent, "Answer the question clearly and accurately.")
 
-        return f"""Context:
+        # Build the memory section if available
+        memory_section = ""
+        if memory_context:
+            memory_section = f"""\n=== SESSION MEMORY (conversation history & extracted knowledge) ===
+{memory_context}
+=== END SESSION MEMORY ===\n"""
+
+        return f"""{memory_section}Context:
 {evidence}
 
 User question: {query}
@@ -753,12 +770,12 @@ Instruction: {instruction}
 
 Answer:"""
 
-    def _synthesize_answer(self, query: str, evidence: str) -> str:
+    def _synthesize_answer(self, query: str, evidence: str, memory_context: str = "") -> str:
         """Use LLM to synthesize final answer from local knowledge base context."""
 
         intent = self._detect_query_intent(query)
         system_prompt = self._build_system_prompt(query, intent)
-        user_prompt = self._build_user_prompt(query, evidence, intent)
+        user_prompt = self._build_user_prompt(query, evidence, intent, memory_context)
 
         messages = [
             {
@@ -822,7 +839,7 @@ Answer:"""
             
         return True
 
-    def _synthesize_with_web_context(self, query: str, evidence: str) -> str:
+    def _synthesize_with_web_context(self, query: str, evidence: str, memory_context: str = "") -> str:
         """Synthesize answer using web search context."""
 
         intent = self._detect_query_intent(query)
@@ -839,7 +856,7 @@ You have access to real-time web search results combined with local knowledge. A
 - **Flag genuine uncertainty.** If sources conflict on a key fact and you can't resolve it, acknowledge the disagreement briefly.
 - **Prioritize authoritative sources.** Official documentation, primary sources, and reputable publications take precedence over aggregator content."""
 
-        user_prompt = self._build_user_prompt(query, evidence, intent)
+        user_prompt = self._build_user_prompt(query, evidence, intent, memory_context)
 
         messages = [
             {"role": "user", "content": user_prompt}
@@ -965,7 +982,12 @@ You have access to real-time web search results combined with local knowledge. A
         self.chat_storage.rename_chat(chat_id, new_title)
 
     def delete_chat(self, chat_id: str):
-        """Delete a chat session"""
+        """Delete a chat session and all associated memory artifacts"""
+        # Clean ArangoDB memory fragments first (SQLite cascade handles the rest)
+        try:
+            self.memory.delete_session_memory(chat_id)
+        except Exception as e:
+            logger.warning(f"Failed to clean memory for deleted chat {chat_id}: {e}")
         self.chat_storage.delete_chat(chat_id)
 
     def get_chat_history(self, chat_id: str, limit: int = 100) -> List[Dict]:
@@ -973,7 +995,12 @@ You have access to real-time web search results combined with local knowledge. A
         return self.chat_storage.get_chat_history(chat_id, limit)
     
     def clear_chat_history(self, chat_id: str):
-        """Clear chat history for a specific session"""
+        """Clear chat history and associated memory artifacts for a specific session"""
+        # Clear memory artifacts (traces, web logs, fragments)
+        try:
+            self.memory.clear_session_memory(chat_id)
+        except Exception as e:
+            logger.warning(f"Failed to clear memory for chat {chat_id}: {e}")
         self.chat_storage.clear_chat_history(chat_id)
     
     def shutdown(self):

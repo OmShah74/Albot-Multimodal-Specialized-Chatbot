@@ -225,6 +225,149 @@ class MemoryManager:
         return self.sqlite.get_web_interaction_logs(session_id)
 
     # ─────────────────────────────────────────────
+    # Full Memory Context (for LLM injection)
+    # ─────────────────────────────────────────────
+
+    def get_full_memory_context(self, session_id: str, max_history: int = 20) -> str:
+        """
+        Build a comprehensive memory context string from all session data.
+        This is injected into LLM prompts to give the model full awareness
+        of the conversation history, extracted knowledge, and web searches.
+
+        Args:
+            session_id: Chat session ID
+            max_history: Maximum number of recent messages to include
+
+        Returns:
+            Formatted memory context string
+        """
+        parts = []
+
+        # 1. Conversation history from SQLite messages table
+        try:
+            history = self.sqlite.get_chat_history(session_id, limit=max_history)
+            if history:
+                conv_lines = []
+                for msg in history:
+                    role_label = "User" if msg["role"] == "user" else "Assistant"
+                    content = msg["content"]
+                    # Truncate very long messages to avoid token overflow
+                    if len(content) > 800:
+                        content = content[:800] + "..."
+                    conv_lines.append(f"[{role_label}]: {content}")
+                parts.append("=== CONVERSATION HISTORY ===\n" + "\n\n".join(conv_lines))
+        except Exception as e:
+            logger.warning(f"Failed to load conversation history for context: {e}")
+
+        # 2. Memory fragments (knowledge, solutions, entities, preferences)
+        try:
+            fragments = self.sqlite.get_session_fragments(session_id)
+            if fragments:
+                frag_lines = []
+                for f in fragments:
+                    tags_str = ", ".join(f.get("tags", [])) if f.get("tags") else ""
+                    score = f.get("importance_score", 0.5)
+                    frag_lines.append(
+                        f"[{f.get('fragment_type', 'knowledge')}] "
+                        f"{f['content']}"
+                        f"{' (tags: ' + tags_str + ')' if tags_str else ''}"
+                    )
+                parts.append("=== MEMORY FRAGMENTS ===\n" + "\n".join(frag_lines))
+        except Exception as e:
+            logger.warning(f"Failed to load memory fragments for context: {e}")
+
+        # 3. Web search history (URLs searched, results obtained)
+        try:
+            web_logs = self.sqlite.get_web_interaction_logs(session_id)
+            if web_logs:
+                web_lines = []
+                seen_urls = set()
+                for log in web_logs:
+                    url = log.get("url", "")
+                    if url and url not in seen_urls:
+                        seen_urls.add(url)
+                        title = log.get("title", "")
+                        provider = log.get("provider", "")
+                        web_lines.append(
+                            f"- {title or url} [{provider}] → {url}"
+                        )
+                if web_lines:
+                    parts.append(
+                        "=== WEB SEARCH HISTORY ===\n" + "\n".join(web_lines[:15])
+                    )
+        except Exception as e:
+            logger.warning(f"Failed to load web history for context: {e}")
+
+        if not parts:
+            return ""
+
+        return "\n\n".join(parts)
+
+    # ─────────────────────────────────────────────
+    # Full Memory Dump (for frontend viewer)
+    # ─────────────────────────────────────────────
+
+    def get_full_memory_dump(self, session_id: str) -> Dict:
+        """
+        Return structured memory data for the frontend memory viewer.
+
+        Returns:
+            Dict with conversation_log, fragments, web_history,
+            reasoning_traces, and summary stats.
+        """
+        conversation_log = []
+        fragments = []
+        web_history = []
+        reasoning_traces = []
+
+        # 1. Conversation log
+        try:
+            history = self.sqlite.get_chat_history(session_id, limit=200)
+            conversation_log = history or []
+        except Exception as e:
+            logger.warning(f"Failed to load conversation log for dump: {e}")
+
+        # 2. Memory fragments
+        try:
+            raw_fragments = self.sqlite.get_session_fragments(session_id)
+            fragments = raw_fragments or []
+        except Exception as e:
+            logger.warning(f"Failed to load fragments for dump: {e}")
+
+        # 3. Web interaction history
+        try:
+            raw_web = self.sqlite.get_web_interaction_logs(session_id)
+            web_history = raw_web or []
+        except Exception as e:
+            logger.warning(f"Failed to load web history for dump: {e}")
+
+        # 4. Reasoning traces
+        try:
+            raw_traces = self.sqlite.get_reasoning_traces(session_id)
+            reasoning_traces = raw_traces or []
+        except Exception as e:
+            logger.warning(f"Failed to load reasoning traces for dump: {e}")
+
+        # 5. Summary stats
+        stats = {
+            "total_messages": len(conversation_log),
+            "user_messages": len([m for m in conversation_log if m.get("role") == "user"]),
+            "assistant_messages": len([m for m in conversation_log if m.get("role") == "assistant"]),
+            "total_fragments": len(fragments),
+            "total_web_searches": len(web_history),
+            "total_traces": len(reasoning_traces),
+        }
+
+        return {
+            "session_id": session_id,
+            "conversation_log": conversation_log,
+            "fragments": fragments,
+            "web_history": web_history,
+            "reasoning_traces": reasoning_traces,
+            "stats": stats,
+        }
+
+    # ─────────────────────────────────────────────
     # Cleanup
     # ─────────────────────────────────────────────
 
@@ -237,3 +380,29 @@ class MemoryManager:
         self.arango.delete_memory_fragments_by_session(session_id)
         # SQLite cascade runs when the chat is deleted via delete_chat()
         logger.info(f"Cleaned up memory artifacts for session {session_id}")
+
+    def clear_session_memory(self, session_id: str):
+        """
+        Clear all memory artifacts for a session WITHOUT deleting the chat itself.
+        Used when user clicks 'Clear Chat' to reset the conversation.
+        """
+        try:
+            # Clear reasoning traces
+            with self.sqlite._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM reasoning_traces WHERE session_id = ?", (session_id,))
+                cursor.execute("DELETE FROM web_interaction_logs WHERE session_id = ?", (session_id,))
+                # Soft-delete fragments (keep in DB but mark as deleted)
+                cursor.execute(
+                    "UPDATE memory_fragments SET is_deleted = 1 WHERE session_id = ? AND is_deleted = 0",
+                    (session_id,)
+                )
+                conn.commit()
+            # Also clean ArangoDB fragments
+            try:
+                self.arango.delete_memory_fragments_by_session(session_id)
+            except Exception:
+                pass
+            logger.info(f"Cleared memory artifacts for session {session_id}")
+        except Exception as e:
+            logger.warning(f"Failed to clear session memory: {e}")
