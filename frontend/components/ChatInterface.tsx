@@ -1,5 +1,5 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Send, Paperclip, Bot, User, Trash2, StopCircle, Zap, Settings2, Clock, ChevronDown, ChevronUp, Activity, X, Globe, FileText, BookOpen, Brain, MessageSquare, Database, Search } from 'lucide-react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { Send, Paperclip, Bot, User, Trash2, StopCircle, Zap, Settings2, Clock, ChevronDown, ChevronUp, Activity, X, Globe, FileText, BookOpen, Brain, MessageSquare, Database, Search, Mic, MicOff } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import axios from 'axios';
 import { api, Message, RetrievalConfig, QueryMetrics } from '@/lib/api';
@@ -44,6 +44,114 @@ export function ChatInterface({ chatId, onChatUpdated }: ChatInterfaceProps) {
   // Abort controller for stopping queries
   const abortControllerRef = useRef<AbortController | null>(null);
 
+  // Speech recognition state
+  const [isListening, setIsListening] = useState(false);
+  const [interimText, setInterimText] = useState('');
+  const [recordingTime, setRecordingTime] = useState(0);
+  const [speechSupported, setSpeechSupported] = useState(false);
+  const recognitionRef = useRef<any>(null);
+  const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Initialize speech recognition
+  useEffect(() => {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      setSpeechSupported(false);
+      return;
+    }
+    setSpeechSupported(true);
+
+    const recognition = new SpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = 'en-US';
+    recognition.maxAlternatives = 1;
+
+    recognition.onresult = (event: any) => {
+      let finalTranscript = '';
+      let interimTranscript = '';
+
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const transcript = event.results[i][0].transcript;
+        if (event.results[i].isFinal) {
+          finalTranscript += transcript;
+        } else {
+          interimTranscript += transcript;
+        }
+      }
+
+      if (finalTranscript) {
+        setInput(prev => {
+          const spacer = prev && !prev.endsWith(' ') ? ' ' : '';
+          return prev + spacer + finalTranscript.trim();
+        });
+        setInterimText('');
+      } else {
+        setInterimText(interimTranscript);
+      }
+    };
+
+    recognition.onerror = (event: any) => {
+      console.error('Speech recognition error:', event.error);
+      if (event.error !== 'no-speech') {
+        setIsListening(false);
+        setInterimText('');
+      }
+    };
+
+    recognition.onend = () => {
+      // If we're still supposed to be listening, restart (handles auto-stop)
+      if (recognitionRef.current?._shouldRestart) {
+        try {
+          recognition.start();
+        } catch (e) {
+          setIsListening(false);
+        }
+      } else {
+        setIsListening(false);
+        setInterimText('');
+      }
+    };
+
+    recognitionRef.current = recognition;
+
+    return () => {
+      recognition.abort();
+      if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+    };
+  }, []);
+
+  const toggleListening = useCallback(() => {
+    const recognition = recognitionRef.current;
+    if (!recognition) return;
+
+    if (isListening) {
+      // Stop listening
+      recognition._shouldRestart = false;
+      recognition.stop();
+      setIsListening(false);
+      setInterimText('');
+      setRecordingTime(0);
+      if (recordingTimerRef.current) {
+        clearInterval(recordingTimerRef.current);
+        recordingTimerRef.current = null;
+      }
+    } else {
+      // Start listening
+      try {
+        recognition._shouldRestart = true;
+        recognition.start();
+        setIsListening(true);
+        setRecordingTime(0);
+        recordingTimerRef.current = setInterval(() => {
+          setRecordingTime(prev => prev + 1);
+        }, 1000);
+      } catch (e) {
+        console.error('Failed to start speech recognition:', e);
+      }
+    }
+  }, [isListening]);
+
   useEffect(() => {
     const loadHistory = async () => {
       if (!chatId) {
@@ -74,6 +182,22 @@ export function ChatInterface({ chatId, onChatUpdated }: ChatInterfaceProps) {
   const handleSubmit = async (e?: React.FormEvent) => {
     e?.preventDefault();
     if (!input.trim() || loading) return;
+
+    // Stop speech recognition if active
+    if (isListening) {
+      const recognition = recognitionRef.current;
+      if (recognition) {
+        recognition._shouldRestart = false;
+        recognition.stop();
+      }
+      setIsListening(false);
+      setInterimText('');
+      setRecordingTime(0);
+      if (recordingTimerRef.current) {
+        clearInterval(recordingTimerRef.current);
+        recordingTimerRef.current = null;
+      }
+    }
 
     const userMsg: Message = { role: 'user', content: input };
     setHistory(prev => [...prev, userMsg]);
@@ -464,29 +588,106 @@ export function ChatInterface({ chatId, onChatUpdated }: ChatInterfaceProps) {
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder={`Ask Albot anything... (${searchMode === 'knowledge_base' ? '📚 KB' : '🌐 Web'} · ${retrievalMode} RAG)`}
-            className="w-full input-glass rounded-2xl py-4 pl-5 pr-14 text-sm focus:outline-none transition-all placeholder:text-neutral-500 text-white shadow-2xl"
+            placeholder={isListening ? 'Listening...' : `Ask Albot anything... (${searchMode === 'knowledge_base' ? '📚 KB' : '🌐 Web'} · ${retrievalMode} RAG)`}
+            className={cn(
+              "w-full input-glass rounded-2xl py-4 pl-5 text-sm focus:outline-none transition-all placeholder:text-neutral-500 text-white shadow-2xl",
+              isListening ? "pr-28 border-red-500/30 shadow-[0_0_20px_rgba(239,68,68,0.1)]" : "pr-24"
+            )}
             disabled={loading}
           />
-          {loading ? (
-            <button 
-              type="button"
-              onClick={handleStop}
-              className="absolute right-2 top-2 p-2 bg-red-500/20 hover:bg-red-500/40 text-red-400 hover:text-red-300 rounded-xl transition-colors active:scale-95 duration-200 border border-red-500/30"
-              title="Stop generation"
-            >
-              <StopCircle className="w-5 h-5" />
-            </button>
-          ) : (
-            <button 
-              type="submit"
-              disabled={!input.trim()}
-              className="absolute right-2 top-2 p-2 bg-white/10 hover:bg-primary text-white rounded-xl transition-colors disabled:opacity-50 disabled:hover:bg-white/10 group-hover:scale-105 active:scale-95 duration-200"
-            >
-              <Send className="w-5 h-5" />
-            </button>
-          )}
+          <div className="absolute right-2 top-2 flex items-center gap-1">
+            {/* Mic Button */}
+            {speechSupported && !loading && (
+              <button 
+                type="button"
+                onClick={toggleListening}
+                className={cn(
+                  "p-2 rounded-xl transition-all duration-300 active:scale-95 relative",
+                  isListening 
+                    ? "bg-red-500/20 text-red-400 hover:bg-red-500/30 border border-red-500/40 shadow-[0_0_15px_rgba(239,68,68,0.2)]" 
+                    : "bg-white/10 hover:bg-white/20 text-neutral-400 hover:text-white"
+                )}
+                title={isListening ? 'Stop recording' : 'Voice input'}
+              >
+                {isListening ? (
+                  <>
+                    <MicOff className="w-5 h-5" />
+                    {/* Pulse rings */}
+                    <span className="absolute inset-0 rounded-xl border-2 border-red-500/50 animate-ping" />
+                    <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full animate-pulse shadow-[0_0_8px_rgba(239,68,68,0.8)]" />
+                  </>
+                ) : (
+                  <Mic className="w-5 h-5" />
+                )}
+              </button>
+            )}
+            {/* Send / Stop Button */}
+            {loading ? (
+              <button 
+                type="button"
+                onClick={handleStop}
+                className="p-2 bg-red-500/20 hover:bg-red-500/40 text-red-400 hover:text-red-300 rounded-xl transition-colors active:scale-95 duration-200 border border-red-500/30"
+                title="Stop generation"
+              >
+                <StopCircle className="w-5 h-5" />
+              </button>
+            ) : (
+              <button 
+                type="submit"
+                disabled={!input.trim()}
+                className="p-2 bg-white/10 hover:bg-primary text-white rounded-xl transition-colors disabled:opacity-50 disabled:hover:bg-white/10 group-hover:scale-105 active:scale-95 duration-200"
+              >
+                <Send className="w-5 h-5" />
+              </button>
+            )}
+          </div>
         </form>
+
+        {/* Voice Recording Indicator */}
+        <AnimatePresence>
+          {isListening && (
+            <motion.div
+              initial={{ opacity: 0, y: -8, height: 0 }}
+              animate={{ opacity: 1, y: 0, height: 'auto' }}
+              exit={{ opacity: 0, y: -8, height: 0 }}
+              className="overflow-hidden"
+            >
+              <div className="flex items-center gap-3 px-4 py-2.5 bg-red-500/10 border border-red-500/20 rounded-xl mt-2">
+                {/* Animated waveform bars */}
+                <div className="flex items-center gap-0.5 h-4">
+                  {[0, 1, 2, 3, 4].map(i => (
+                    <div
+                      key={i}
+                      className="w-1 bg-red-400 rounded-full"
+                      style={{
+                        animation: `speechWave 0.8s ease-in-out ${i * 0.12}s infinite alternate`,
+                        height: '4px',
+                      }}
+                    />
+                  ))}
+                </div>
+                <span className="text-[10px] uppercase tracking-widest font-black text-red-400">
+                  Recording
+                </span>
+                <span className="text-[10px] font-mono text-red-400/60">
+                  {Math.floor(recordingTime / 60)}:{String(recordingTime % 60).padStart(2, '0')}
+                </span>
+                {interimText && (
+                  <span className="text-xs text-neutral-400 italic truncate flex-1 ml-2">
+                    {interimText}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={toggleListening}
+                  className="text-[9px] uppercase tracking-widest font-black text-red-400 hover:text-red-300 transition-colors px-2 py-1 bg-red-500/10 rounded-lg border border-red-500/20 hover:border-red-500/30 ml-auto"
+                >
+                  Stop
+                </button>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
         <p className="text-center text-[10px] text-neutral-600 uppercase tracking-widest font-medium">
            Albot Multi-Modal Intelligence Engine v1.0
         </p>
