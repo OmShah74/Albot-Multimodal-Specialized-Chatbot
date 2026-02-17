@@ -6,12 +6,67 @@ import { api, Message, RetrievalConfig, QueryMetrics } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNotification } from '@/context/NotificationContext';
+import remarkGfm from 'remark-gfm';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { Copy, Check } from 'lucide-react';
 
 interface ChatInterfaceProps {
   chatId: string | null;
   onChatUpdated?: (chatId: string, updates: Partial<{ title: string }>) => void;
   onCreateSession?: () => Promise<string | null>;
 }
+
+const CodeBlock = ({ inline, className, children, ...props }: any) => {
+  const match = /language-(\w+)/.exec(className || '');
+  const [copied, setCopied] = useState(false);
+  const { showNotification } = useNotification();
+
+  const handleCopy = async () => {
+    await navigator.clipboard.writeText(String(children).replace(/\n$/, ''));
+    setCopied(true);
+    showNotification({
+      type: 'success',
+      title: 'Copied',
+      message: 'Code copied to clipboard'
+    });
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return !inline && match ? (
+    <div className="relative group rounded-xl overflow-hidden my-4 border border-white/10 bg-[#1e1e1e]">
+      <div className="flex items-center justify-between px-4 py-2 bg-white/5 border-b border-white/5">
+        <span className="text-xs text-neutral-400 font-mono">{match[1]}</span>
+        <button
+          onClick={handleCopy}
+          className="flex items-center gap-1.5 text-xs text-neutral-400 hover:text-white transition-colors"
+        >
+          {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+          {copied ? 'Copied!' : 'Copy'}
+        </button>
+      </div>
+      <SyntaxHighlighter
+        style={oneDark}
+        language={match[1]}
+        PreTag="div"
+        customStyle={{
+          margin: 0,
+          background: 'transparent',
+          padding: '1.5rem',
+          fontSize: '0.875rem',
+          lineHeight: '1.5'
+        }}
+        {...props}
+      >
+        {String(children).replace(/\n$/, '')}
+      </SyntaxHighlighter>
+    </div>
+  ) : (
+    <code className={cn("bg-white/10 text-primary px-1.5 py-0.5 rounded text-sm font-mono", className)} {...props}>
+      {children}
+    </code>
+  );
+};
 
 export function ChatInterface({ chatId, onChatUpdated, onCreateSession }: ChatInterfaceProps) {
   const { showNotification } = useNotification();
@@ -459,7 +514,77 @@ export function ChatInterface({ chatId, onChatUpdated, onCreateSession }: ChatIn
                 {msg.role === 'assistant' ? (
                   <div className="flex flex-col gap-3">
                     <div className="prose prose-invert prose-base max-w-none prose-p:leading-relaxed prose-pre:my-4 prose-p:my-3 prose-headings:mb-4 prose-headings:mt-6 first:prose-headings:mt-0">
-                      <ReactMarkdown>{msg.content}</ReactMarkdown>
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        components={{
+                          code: CodeBlock,
+                          table: ({ children }) => (
+                            <div className="overflow-x-auto my-4 border border-white/10 rounded-xl">
+                              <table className="w-full text-left text-sm border-collapse">
+                                {children}
+                              </table>
+                            </div>
+                          ),
+                          thead: ({ children }) => (
+                            <thead className="bg-white/5 text-neutral-200 border-b border-white/10">
+                              {children}
+                            </thead>
+                          ),
+                          tbody: ({ children }) => (
+                            <tbody className="divide-y divide-white/5">
+                              {children}
+                            </tbody>
+                          ),
+                          tr: ({ children }) => (
+                            <tr className="hover:bg-white/5 transition-colors">
+                              {children}
+                            </tr>
+                          ),
+                          th: ({ children }) => (
+                            <th className="px-4 py-3 font-medium text-xs uppercase tracking-wider">
+                              {children}
+                            </th>
+                          ),
+                          td: ({ children }) => (
+                            <td className="px-4 py-3 text-neutral-400">
+                              {children}
+                            </td>
+                          ),
+                          blockquote: ({ children }) => (
+                            <blockquote className="border-l-4 border-primary/40 pl-4 py-1 my-4 italic text-neutral-400 bg-primary/5 rounded-r-lg">
+                              {children}
+                            </blockquote>
+                          ),
+                          ul: ({ children }) => (
+                            <ul className="list-disc list-outside ml-4 space-y-1 my-2 text-neutral-300">
+                              {children}
+                            </ul>
+                          ),
+                          ol: ({ children }) => (
+                            <ol className="list-decimal list-outside ml-4 space-y-1 my-2 text-neutral-300">
+                              {children}
+                            </ol>
+                          )
+                        }}
+                      >
+                        {msg.content}
+                      </ReactMarkdown>
+                      <div className="mt-4 flex justify-end">
+                         <button
+                          onClick={() => {
+                            navigator.clipboard.writeText(msg.content);
+                            showNotification({
+                              type: 'success',
+                              title: 'Copied',
+                              message: 'Response copied to clipboard'
+                            });
+                          }}
+                          className="flex items-center gap-1.5 text-[10px] text-neutral-500 hover:text-neutral-300 transition-colors uppercase tracking-widest font-bold px-2 py-1 rounded hover:bg-white/5"
+                        >
+                          <Copy className="w-3 h-3" />
+                          Copy Response
+                        </button>
+                      </div>
                     </div>
                     {msg.sources && msg.sources.length > 0 && (
                       <div className="pt-3 border-t border-white/10 mt-1">
@@ -511,7 +636,9 @@ export function ChatInterface({ chatId, onChatUpdated, onCreateSession }: ChatIn
                     )}
                   </div>
                 ) : (
-                  <ReactMarkdown>{msg.content}</ReactMarkdown>
+                  <div className="prose prose-invert max-w-none prose-p:text-neutral-300 prose-headings:text-neutral-200 prose-strong:text-white prose-a:text-primary prose-a:no-underline hover:prose-a:underline prose-code:text-primary prose-code:bg-white/5 prose-code:px-1 prose-code:rounded prose-pre:bg-transparent prose-pre:p-0">
+                    <ReactMarkdown>{msg.content}</ReactMarkdown>
+                  </div>
                 )}
               </div>
             </motion.div>
