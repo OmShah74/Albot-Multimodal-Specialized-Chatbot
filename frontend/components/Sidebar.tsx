@@ -69,50 +69,49 @@ export function Sidebar({
 
   return (
     <div className={cn(
-      "h-screen border-r border-white/10 flex flex-col glass backdrop-blur-xl shrink-0 transition-all duration-300 relative",
-      isCollapsed ? "w-20" : "w-64"
+      "h-screen border-r border-white/10 flex flex-col glass backdrop-blur-xl shrink-0 transition-all duration-300 relative z-20",
+      isCollapsed ? "w-[70px]" : "w-64"
     )}>
-      <div className="p-4 flex items-center justify-between border-b border-white/10">
-        {!isCollapsed && (
-          <div className="flex items-center gap-2 overflow-hidden">
-            <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center shadow-[0_0_15px_rgba(147,51,234,0.5)]">
-              <Database className="w-5 h-5 text-white" />
-            </div>
-            <h1 className="font-bold text-lg tracking-tight">Albot</h1>
-          </div>
-        )}
-        {isCollapsed && (
-          <div className="mx-auto w-8 h-8 rounded-lg bg-primary flex items-center justify-center shadow-[0_0_15px_rgba(147,51,234,0.5)]">
+      <div className="p-4 flex items-center justify-between border-b border-white/10 relative">
+        <div className={cn("flex items-center gap-2 overflow-hidden transition-all", isCollapsed && "w-full justify-center")}>
+          <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center shadow-[0_0_15px_rgba(147,51,234,0.5)] shrink-0">
             <Database className="w-5 h-5 text-white" />
           </div>
-        )}
+          <h1 className={cn("font-bold text-lg tracking-tight transition-opacity duration-200", isCollapsed ? "hidden opacity-0" : "opacity-100")}>
+            Albot
+          </h1>
+        </div>
+        
         <button 
           onClick={onToggle}
           className={cn(
-            "p-1.5 hover:bg-white/5 rounded-lg transition-colors text-neutral-500 hover:text-white",
-            isCollapsed && "absolute -right-3 top-20 bg-[#0a0a0a] border border-white/10 shadow-xl z-50 rounded-full"
+            "p-1.5 hover:bg-white/5 rounded-lg transition-all text-neutral-500 hover:text-white z-50",
+            isCollapsed 
+              ? "absolute -right-3 top-4 bg-[#0a0a0a] border border-white/10 shadow-xl rounded-full" 
+              : "relative"
           )}
         >
-          <PanelLeft className={cn("w-4 h-4", isCollapsed && "rotate-180")} />
+          <PanelLeft className={cn("w-4 h-4 transition-transform", isCollapsed && "rotate-180")} />
         </button>
       </div>
 
-      <div className="p-4">
+      <div className="p-3">
         <button 
           onClick={onCreateChat} 
           className={cn(
             "flex items-center gap-2 rounded-xl border border-white/10 hover:bg-white/5 transition-all text-sm font-medium hover:border-primary/50 group bg-primary/5",
-            isCollapsed ? "p-3 justify-center" : "px-4 py-3 w-full"
+            isCollapsed ? "w-full aspect-square justify-center p-0" : "px-4 py-3 w-full"
           )}
+          title="New Chat"
         >
-          <Plus className="w-4 h-4 text-primary group-hover:text-primary-glow" />
+          <Plus className="w-5 h-5 text-primary group-hover:text-primary-glow" />
           {!isCollapsed && <span>New Chat</span>}
         </button>
       </div>
 
       <div className="flex-1 overflow-y-auto px-2 py-2 CustomScrollbar">
-        <div className={cn("px-2", isCollapsed && "text-center")}>
-          {!isCollapsed && <p className="text-xs font-medium text-neutral-500 uppercase tracking-wider px-2 mb-2">Recent</p>}
+        <div className="space-y-4">
+          {!isCollapsed && <p className="text-xs font-medium text-neutral-500 uppercase tracking-wider px-2">Recent</p>}
           
           <div className="space-y-1">
             {chats.length === 0 ? (
@@ -128,8 +127,10 @@ export function Sidebar({
                     "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all cursor-pointer group relative",
                     currentChatId === chat.id 
                       ? "bg-white/10 text-white shadow-lg border border-white/5" 
-                      : "text-neutral-400 hover:text-white hover:bg-white/5"
+                      : "text-neutral-400 hover:text-white hover:bg-white/5",
+                    isCollapsed && "justify-center px-0 py-3"
                   )}
+                  title={chat.title}
                 >
                   <MessageSquare className={cn(
                     "w-4 h-4 shrink-0 transition-colors", 
@@ -185,30 +186,33 @@ export function Sidebar({
         </div>
       </div>
 
-      <div className="p-4 border-t border-white/10 flex flex-col gap-1">
+      <div className="p-3 border-t border-white/10 flex flex-col gap-1">
         <button 
           onClick={onOpenIngest}
-          className={cn("flex items-center gap-4 px-3 py-2.5 rounded-lg text-sm text-neutral-400 hover:text-white hover:bg-white/5 transition-colors group", isCollapsed && "justify-center")}
+          className={cn("flex items-center gap-4 px-3 py-2.5 rounded-lg text-sm text-neutral-400 hover:text-white hover:bg-white/5 transition-colors group", isCollapsed && "justify-center px-0")}
+          title="Ingest Knowledge"
         >
           <Upload className="w-4 h-4 group-hover:text-primary transition-colors" />
           {!isCollapsed && <span>Ingest Knowledge</span>}
         </button>
         <button 
           onClick={onOpenApiKeys}
-          className={cn("flex items-center gap-4 px-3 py-2.5 rounded-lg text-sm text-neutral-400 hover:text-white hover:bg-white/5 transition-colors group", isCollapsed && "justify-center")}
+          className={cn("flex items-center gap-4 px-3 py-2.5 rounded-lg text-sm text-neutral-400 hover:text-white hover:bg-white/5 transition-colors group", isCollapsed && "justify-center px-0")}
+          title="API Keys"
         >
           <Key className="w-4 h-4 group-hover:text-primary transition-colors" />
           {!isCollapsed && <span>API Keys</span>}
         </button>
         <button 
           onClick={onOpenSettings}
-          className={cn("flex items-center gap-4 px-3 py-2.5 rounded-lg text-sm text-neutral-400 hover:text-white hover:bg-white/5 transition-colors group", isCollapsed && "justify-center")}
+          className={cn("flex items-center gap-4 px-3 py-2.5 rounded-lg text-sm text-neutral-400 hover:text-white hover:bg-white/5 transition-colors group", isCollapsed && "justify-center px-0")}
+          title="Settings"
         >
           <Settings className="w-4 h-4 group-hover:text-primary transition-colors" />
           {!isCollapsed && <span>General Settings</span>}
         </button>
 
-        <div className={cn("flex items-center gap-3 px-3 py-2 mt-4 rounded-lg text-xs text-neutral-600 border-t border-white/5 pt-4", isCollapsed && "justify-center")}>
+        <div className={cn("flex items-center gap-3 px-3 py-2 mt-2 rounded-lg text-xs text-neutral-600 border-t border-white/5 pt-3", isCollapsed && "justify-center px-0 border-none")}>
            <Cpu className="w-3 h-3" />
            {!isCollapsed && <span>Albot Core: v1.0</span>}
         </div>

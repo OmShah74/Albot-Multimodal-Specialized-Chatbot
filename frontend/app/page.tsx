@@ -30,13 +30,8 @@ export default function Home() {
       const chatList = await api.getChats();
       setChats(chatList);
       
-      // If no chat selected and chats exist, select the most recent one
-      if (!currentChatId && chatList.length > 0) {
-        setCurrentChatId(chatList[0].id);
-      } else if (chatList.length === 0) {
-        // If no chats, create one automatically
-        handleCreateChat();
-      }
+      // Do not auto-select recent chat. Begin with new chat interface.
+      // If chats exist, they are loaded in sidebar, but main view is empty state.
     } catch (err) {
       console.error("Failed to load chats:", err);
     }
@@ -47,8 +42,10 @@ export default function Home() {
       const newChat = await api.createChat();
       setChats(prev => [newChat, ...prev]);
       setCurrentChatId(newChat.id);
+      return newChat.id;
     } catch (err) {
       console.error("Failed to create chat:", err);
+      return null;
     }
   };
 
@@ -159,6 +156,7 @@ function HomeContent({
            <ChatInterface 
               chatId={currentChatId} 
               onChatUpdated={handleChatUpdated}
+              onCreateSession={onCreateChat}
            />
         </div>
 

@@ -10,9 +10,10 @@ import { useNotification } from '@/context/NotificationContext';
 interface ChatInterfaceProps {
   chatId: string | null;
   onChatUpdated?: (chatId: string, updates: Partial<{ title: string }>) => void;
+  onCreateSession?: () => Promise<string | null>;
 }
 
-export function ChatInterface({ chatId, onChatUpdated }: ChatInterfaceProps) {
+export function ChatInterface({ chatId, onChatUpdated, onCreateSession }: ChatInterfaceProps) {
   const [input, setInput] = useState('');
   const [history, setHistory] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
@@ -204,8 +205,29 @@ export function ChatInterface({ chatId, onChatUpdated }: ChatInterfaceProps) {
     setInput('');
     setLoading(true);
 
-    if (!chatId) return; // Should not happen if UI is correct
-
+    // If no chat ID (New Chat state), create a session first
+    let activeChatId = chatId;
+    if (!activeChatId) {
+      if (onCreateSession) {
+        try {
+          const newId = await onCreateSession();
+          if (newId) {
+            activeChatId = newId;
+          } else {
+             throw new Error("Failed to create new chat session");
+          }
+        } catch (e) {
+          console.error("Auto-creation failed", e);
+          setLoading(false);
+          return;
+        }
+      } else {
+        // No create handler, cannot proceed
+        setLoading(false);
+        return;
+      }
+    }
+    
     // Create a new AbortController for this request
     const controller = new AbortController();
     abortControllerRef.current = controller;
@@ -218,7 +240,7 @@ export function ChatInterface({ chatId, onChatUpdated }: ChatInterfaceProps) {
         search_mode: searchMode
       };
 
-      const response = await api.query(userMsg.content, chatId, history, config, controller.signal);
+      const response = await api.query(userMsg.content, activeChatId!, history, config, controller.signal);
       
       const assistantMsg: Message = { 
         role: 'assistant', 
@@ -231,8 +253,8 @@ export function ChatInterface({ chatId, onChatUpdated }: ChatInterfaceProps) {
         setLastMetrics(response.metrics);
       }
 
-      if (response.chat_title && chatId && onChatUpdated) {
-        onChatUpdated(chatId, { title: response.chat_title });
+      if (response.chat_title && activeChatId && onChatUpdated) {
+        onChatUpdated(activeChatId, { title: response.chat_title });
       }
       
       setHistory(prev => [...prev, assistantMsg]);
@@ -262,6 +284,7 @@ export function ChatInterface({ chatId, onChatUpdated }: ChatInterfaceProps) {
     // Abort the in-flight HTTP request
     abortControllerRef.current?.abort();
 
+    // Also notify the backend to cancel server-side processing
     // Also notify the backend to cancel server-side processing
     if (chatId) {
       try {
