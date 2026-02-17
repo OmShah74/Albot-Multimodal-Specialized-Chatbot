@@ -14,6 +14,7 @@ interface ChatInterfaceProps {
 }
 
 export function ChatInterface({ chatId, onChatUpdated, onCreateSession }: ChatInterfaceProps) {
+  const { showNotification } = useNotification();
   const [input, setInput] = useState('');
   const [history, setHistory] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
@@ -178,7 +179,6 @@ export function ChatInterface({ chatId, onChatUpdated, onCreateSession }: ChatIn
     }
   }, [history, loading]);
 
-  const { showNotification } = useNotification();
 
   const handleSubmit = async (e?: React.FormEvent) => {
     e?.preventDefault();
@@ -335,28 +335,28 @@ export function ChatInterface({ chatId, onChatUpdated, onCreateSession }: ChatIn
         try {
           if (type === 'conversation') {
             await api.deleteMessage(id as number);
-            setMemoryDump(prev => prev ? ({
+            setMemoryDump((prev: any) => prev ? ({
               ...prev,
               conversation_log: prev.conversation_log.filter((m: any) => m.id !== id),
               stats: { ...prev.stats, total_messages: prev.stats.total_messages - 1 }
             }) : null);
           } else if (type === 'fragments') {
             await api.deleteMemoryFragment(id as string);
-            setMemoryDump(prev => prev ? ({
+            setMemoryDump((prev: any) => prev ? ({
               ...prev,
               fragments: prev.fragments.filter((f: any) => f.fragment_id !== id),
               stats: { ...prev.stats, total_fragments: prev.stats.total_fragments - 1 }
             }) : null);
           } else if (type === 'web') {
             await api.deleteWebLog(id as number);
-            setMemoryDump(prev => prev ? ({
+            setMemoryDump((prev: any) => prev ? ({
               ...prev,
               web_history: prev.web_history.filter((w: any) => w.id !== id),
               stats: { ...prev.stats, total_web_searches: prev.stats.total_web_searches - 1 }
             }) : null);
           } else if (type === 'traces') {
             await api.deleteTrace(id as string);
-            setMemoryDump(prev => prev ? ({
+            setMemoryDump((prev: any) => prev ? ({
               ...prev,
               reasoning_traces: prev.reasoning_traces.filter((t: any) => t.id !== id),
               stats: { ...prev.stats, total_traces: prev.stats.total_traces - 1 }
