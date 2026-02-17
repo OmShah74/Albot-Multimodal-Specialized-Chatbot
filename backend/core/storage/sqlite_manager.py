@@ -259,6 +259,17 @@ class SQLiteStorageManager:
         except Exception as e:
             logger.error(f"Failed to update timestamp for chat {chat_id}: {e}")
 
+    def delete_message(self, message_id: int):
+        """Delete a single message from chat history"""
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM messages WHERE id = ?", (message_id,))
+                conn.commit()
+            logger.info(f"Deleted message {message_id}")
+        except Exception as e:
+            logger.error(f"Failed to delete message {message_id}: {e}")
+
     # --- Message Management Methods ---
 
     def save_chat_message(self, chat_id: str, role: str, content: str, sources: List[str] = None, metrics: Dict = None):
@@ -311,7 +322,7 @@ class SQLiteStorageManager:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.cursor()
                 cursor.execute("""
-                    SELECT role, content, timestamp, sources, metrics
+                    SELECT id, role, content, timestamp, sources, metrics
                     FROM messages
                     WHERE chat_id = ?
                     ORDER BY timestamp ASC
@@ -321,6 +332,7 @@ class SQLiteStorageManager:
                 history = []
                 for row in rows:
                     history.append({
+                        "id": row["id"],
                         "role": row["role"],
                         "content": row["content"],
                         "timestamp": row["timestamp"],
@@ -443,6 +455,17 @@ class SQLiteStorageManager:
         except Exception as e:
             logger.error(f"Failed to get turn count for {session_id}: {e}")
             return 0
+
+    def delete_reasoning_trace(self, trace_id: str):
+        """Delete a reasoning trace by ID"""
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM reasoning_traces WHERE id = ?", (trace_id,))
+                conn.commit()
+            logger.info(f"Deleted reasoning trace {trace_id}")
+        except Exception as e:
+            logger.error(f"Failed to delete reasoning trace {trace_id}: {e}")
 
     # --- Memory Fragments ---
 
@@ -712,6 +735,17 @@ class SQLiteStorageManager:
         except Exception as e:
             logger.error(f"Failed to get web logs for {session_id}: {e}")
             return []
+
+    def delete_web_interaction_log(self, log_id: int):
+        """Delete a web interaction log by ID"""
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM web_interaction_logs WHERE id = ?", (log_id,))
+                conn.commit()
+            logger.info(f"Deleted web log {log_id}")
+        except Exception as e:
+            logger.error(f"Failed to delete web log {log_id}: {e}")
 
     # --- Bulk Memory Ops ---
 

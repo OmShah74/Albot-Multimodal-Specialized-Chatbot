@@ -449,6 +449,36 @@ async def delete_memory_fragment(fragment_id: str):
         logger.error(f"Failed to delete memory fragment: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.delete("/memory/web/{log_id}")
+async def delete_web_log(log_id: int):
+    """Delete a specific web interaction log"""
+    try:
+        rag_system.memory.delete_web_log(log_id)
+        return {"status": "success"}
+    except Exception as e:
+        logger.error(f"Failed to delete web log: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/memory/trace/{trace_id}")
+async def delete_reasoning_trace(trace_id: str):
+    """Delete a specific reasoning trace"""
+    try:
+        rag_system.memory.delete_reasoning_trace(trace_id)
+        return {"status": "success"}
+    except Exception as e:
+        logger.error(f"Failed to delete reasoning trace: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/memory/message/{message_id}")
+async def delete_chat_message(message_id: int):
+    """Delete a specific chat message"""
+    try:
+        rag_system.memory.delete_message(message_id)
+        return {"status": "success"}
+    except Exception as e:
+        logger.error(f"Failed to delete chat message: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/memory/combine")
 async def combine_sessions(request: CombineSessionsRequest):
     """Combine memories from multiple sessions into a target namespace"""

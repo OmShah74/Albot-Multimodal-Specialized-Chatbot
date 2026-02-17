@@ -325,6 +325,62 @@ export function ChatInterface({ chatId, onChatUpdated, onCreateSession }: ChatIn
     });
   };
 
+  const handleDeleteMemoryItem = async (type: 'conversation' | 'fragments' | 'web' | 'traces', id: string | number) => {
+    showNotification({
+      type: 'confirm',
+      title: 'Delete Memory Item',
+      message: 'Are you sure you want to delete this memory item? This action cannot be undone.',
+      confirmText: 'Delete',
+      onConfirm: async () => {
+        try {
+          if (type === 'conversation') {
+            await api.deleteMessage(id as number);
+            setMemoryDump(prev => prev ? ({
+              ...prev,
+              conversation_log: prev.conversation_log.filter((m: any) => m.id !== id),
+              stats: { ...prev.stats, total_messages: prev.stats.total_messages - 1 }
+            }) : null);
+          } else if (type === 'fragments') {
+            await api.deleteMemoryFragment(id as string);
+            setMemoryDump(prev => prev ? ({
+              ...prev,
+              fragments: prev.fragments.filter((f: any) => f.fragment_id !== id),
+              stats: { ...prev.stats, total_fragments: prev.stats.total_fragments - 1 }
+            }) : null);
+          } else if (type === 'web') {
+            await api.deleteWebLog(id as number);
+            setMemoryDump(prev => prev ? ({
+              ...prev,
+              web_history: prev.web_history.filter((w: any) => w.id !== id),
+              stats: { ...prev.stats, total_web_searches: prev.stats.total_web_searches - 1 }
+            }) : null);
+          } else if (type === 'traces') {
+            await api.deleteTrace(id as string);
+            setMemoryDump(prev => prev ? ({
+              ...prev,
+              reasoning_traces: prev.reasoning_traces.filter((t: any) => t.id !== id),
+              stats: { ...prev.stats, total_traces: prev.stats.total_traces - 1 }
+            }) : null);
+          }
+          showNotification({
+            type: 'success',
+            title: 'Deleted',
+            message: 'Memory item deleted successfully.'
+          });
+        } catch (err) {
+          console.error('Failed to delete memory item:', err);
+          showNotification({
+            type: 'error',
+            title: 'Error',
+            message: 'Failed to delete memory item.'
+          });
+        }
+      }
+    });
+  };
+
+
+
   return (
     <div className="flex-1 flex flex-col h-full relative">
       <div className="absolute top-4 right-8 z-20 flex gap-2">
@@ -937,11 +993,18 @@ export function ChatInterface({ chatId, onChatUpdated, onCreateSession }: ChatIn
                         ) : (
                           memoryDump.conversation_log.map((msg: any, i: number) => (
                             <div key={i} className={cn(
-                              "p-4 rounded-2xl border",
+                              "p-4 rounded-2xl border relative group",
                               msg.role === 'user' 
                                 ? "bg-primary/5 border-primary/20" 
                                 : "bg-white/5 border-white/5"
                             )}>
+                              <button
+                                onClick={() => handleDeleteMemoryItem('conversation', msg.id)}
+                                className="absolute top-2 right-2 p-1.5 rounded-lg bg-black/20 text-neutral-500 hover:text-red-400 hover:bg-red-500/10 opacity-0 group-hover:opacity-100 transition-all"
+                                title="Delete message"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
                               <div className="flex items-center gap-2 mb-2">
                                 <span className={cn(
                                   "text-[9px] uppercase tracking-widest font-black px-2 py-0.5 rounded-md",
@@ -967,7 +1030,14 @@ export function ChatInterface({ chatId, onChatUpdated, onCreateSession }: ChatIn
                           <p className="text-center text-neutral-500 text-sm py-8">No memory fragments extracted yet.</p>
                         ) : (
                           memoryDump.fragments.map((frag: any, i: number) => (
-                            <div key={i} className="p-4 rounded-2xl bg-white/5 border border-white/5 space-y-2">
+                            <div key={i} className="p-4 rounded-2xl bg-white/5 border border-white/5 space-y-2 relative group">
+                              <button
+                                onClick={() => handleDeleteMemoryItem('fragments', frag.fragment_id)}
+                                className="absolute top-2 right-2 p-1.5 rounded-lg bg-black/20 text-neutral-500 hover:text-red-400 hover:bg-red-500/10 opacity-0 group-hover:opacity-100 transition-all"
+                                title="Delete fragment"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
                               <div className="flex items-center gap-2 flex-wrap">
                                 <span className="text-[9px] uppercase tracking-widest font-black bg-purple-500/20 text-purple-400 px-2 py-0.5 rounded-md">
                                   {frag.fragment_type}
@@ -999,7 +1069,14 @@ export function ChatInterface({ chatId, onChatUpdated, onCreateSession }: ChatIn
                           <p className="text-center text-neutral-500 text-sm py-8">No web searches performed in this session.</p>
                         ) : (
                           memoryDump.web_history.map((log: any, i: number) => (
-                            <div key={i} className="p-4 rounded-2xl bg-white/5 border border-white/5 space-y-1">
+                            <div key={i} className="p-4 rounded-2xl bg-white/5 border border-white/5 space-y-1 relative group">
+                              <button
+                                onClick={() => handleDeleteMemoryItem('web', log.id)}
+                                className="absolute top-2 right-2 p-1.5 rounded-lg bg-black/20 text-neutral-500 hover:text-red-400 hover:bg-red-500/10 opacity-0 group-hover:opacity-100 transition-all"
+                                title="Delete log"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
                               <div className="flex items-center gap-2">
                                 <Globe className="w-3 h-3 text-primary" />
                                 <span className="text-[9px] uppercase tracking-widest font-black bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded-md">
@@ -1029,7 +1106,14 @@ export function ChatInterface({ chatId, onChatUpdated, onCreateSession }: ChatIn
                           <p className="text-center text-neutral-500 text-sm py-8">No reasoning traces recorded yet.</p>
                         ) : (
                           memoryDump.reasoning_traces.map((trace: any, i: number) => (
-                            <div key={i} className="p-4 rounded-2xl bg-white/5 border border-white/5 space-y-3">
+                            <div key={i} className="p-4 rounded-2xl bg-white/5 border border-white/5 space-y-3 relative group">
+                              <button
+                                onClick={() => handleDeleteMemoryItem('traces', trace.id)}
+                                className="absolute top-2 right-2 p-1.5 rounded-lg bg-black/20 text-neutral-500 hover:text-red-400 hover:bg-red-500/10 opacity-0 group-hover:opacity-100 transition-all"
+                                title="Delete trace"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
                               <div className="flex items-center justify-between">
                                 <div className="flex items-center gap-2">
                                   <span className="w-8 h-8 rounded-lg bg-white/5 flex items-center justify-center text-[10px] font-black text-neutral-500 border border-white/10">T{trace.turn_index + 1}</span>

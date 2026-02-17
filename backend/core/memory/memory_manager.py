@@ -53,6 +53,10 @@ class MemoryManager:
         """Get the number of completed turns in a session."""
         return self.sqlite.get_turn_count(session_id)
 
+    def delete_reasoning_trace(self, trace_id: str):
+        """Delete a reasoning trace."""
+        self.sqlite.delete_reasoning_trace(trace_id)
+
     # ─────────────────────────────────────────────
     # Memory Fragments
     # ─────────────────────────────────────────────
@@ -224,6 +228,10 @@ class MemoryManager:
         """Get all web interaction logs for a session."""
         return self.sqlite.get_web_interaction_logs(session_id)
 
+    def delete_web_log(self, log_id: int):
+        """Delete a web interaction log."""
+        self.sqlite.delete_web_interaction_log(log_id)
+
     # ─────────────────────────────────────────────
     # Full Memory Context (for LLM injection)
     # ─────────────────────────────────────────────
@@ -302,6 +310,10 @@ class MemoryManager:
             return ""
 
         return "\n\n".join(parts)
+
+    def delete_message(self, message_id: int):
+        """Delete a chat message."""
+        self.sqlite.delete_message(message_id)
 
     # ─────────────────────────────────────────────
     # Full Memory Dump (for frontend viewer)
