@@ -504,6 +504,350 @@ async def get_namespaces(session_id: Optional[str] = None):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ═══════════════════════════════════════════════════
+# Deep Research Endpoints
+# ═══════════════════════════════════════════════════
+
+import asyncio
+import uuid as _uuid
+from datetime import datetime as _datetime
+
+from backend.core.deep_research.models import (
+    ResearchConfig, ResearchStatus, ResearchProgressEvent, ResearchResult
+)
+from backend.core.deep_research.deep_research_orchestrator import DeepResearchOrchestrator
+
+
+# Deep research orchestrator (lazily initialized from rag_system)
+_deep_research: Optional[DeepResearchOrchestrator] = None
+_research_tasks: dict = {}  # session_id → asyncio.Task
+
+
+def _get_deep_research() -> DeepResearchOrchestrator:
+    """Get or create the deep research orchestrator from the RAG system."""
+    global _deep_research
+    if _deep_research is None:
+        if not rag_system:
+            raise HTTPException(status_code=503, detail="System not initialized")
+        _deep_research = DeepResearchOrchestrator(
+            llm_router=rag_system.llm_router,
+            web_search_engine=rag_system.web_search,
+        )
+    return _deep_research
+
+
+class DeepResearchRequest(BaseModel):
+    query: str
+    chat_id: str = "default"
+    config: Optional[ResearchConfig] = None
+
+
+class DeepResearchStatusResponse(BaseModel):
+    session_id: str
+    status: str
+    sources_scraped: int = 0
+    total_findings: int = 0
+    progress_events: List[dict] = []
+    plan: Optional[dict] = None
+
+
+@app.post("/research/start")
+async def start_research(request: DeepResearchRequest):
+    """Start a deep research session. Returns immediately with session_id."""
+    try:
+        orchestrator = _get_deep_research()
+        session_id = str(_uuid.uuid4())
+        config = request.config or ResearchConfig()
+        
+        # Persist the session
+        if rag_system and hasattr(rag_system, 'chat_storage'):
+            # First, save the user message to history so it persists on reload
+            rag_system.chat_storage.save_chat_message(
+                request.chat_id,
+                "user",
+                request.query
+            )
+            
+            # Then create the research session
+            rag_system.chat_storage.create_research_session({
+                "id": session_id,
+                "chat_id": request.chat_id,
+                "query": request.query,
+                "status": "planning",
+                "config": config.model_dump(),
+            })
+        
+        # Run research in background
+        async def _run():
+            try:
+                async def on_progress(event: ResearchProgressEvent):
+                    # Save progress to DB for polling
+                    if rag_system and hasattr(rag_system, 'chat_storage'):
+                        rag_system.chat_storage.save_research_progress(
+                            session_id, event.model_dump()
+                        )
+                
+                result = await orchestrator.run_research(
+                    query=request.query,
+                    session_id=session_id,
+                    config=config,
+                    on_progress=on_progress,
+                )
+                
+                # Persist final result
+                if rag_system and hasattr(rag_system, 'chat_storage'):
+                    rag_system.chat_storage.update_research_session(session_id, {
+                        "status": result.status.value,
+                        "report": result.report,
+                        "sources_scraped": result.total_sources_scraped,
+                        "findings_count": result.total_findings,
+                        "total_time_ms": result.research_time_ms,
+                        "completed_at": _datetime.utcnow().isoformat(),
+                    })
+                    
+                    # Also save the report as an assistant message in the chat
+                    if result.report and request.chat_id:
+                        rag_system.chat_storage.save_chat_message(
+                            request.chat_id,
+                            "assistant",
+                            result.report,
+                            sources=[s.url for s in result.sources],
+                            metrics={
+                                "type": "deep_research", 
+                                "session_id": session_id,
+                                "total_time_ms": result.research_time_ms,
+                                "total_sources": result.total_sources_scraped,
+                                "total_findings": result.total_findings
+                            }
+                        )
+                    
+                    # ── Memory post-processing for deep research ──
+                    try:
+                        _mem_uuid = __import__('uuid')
+                        turn_index = rag_system.chat_storage.get_turn_count(request.chat_id)
+                        
+                        # 1. Save reasoning trace
+                        rag_system.chat_storage.save_reasoning_trace({
+                            "trace_id": str(_mem_uuid.uuid4()),
+                            "session_id": request.chat_id,
+                            "turn_index": turn_index,
+                            "user_query": request.query,
+                            "reformulated_query": None,
+                            "retrieved_doc_ids": [],
+                            "retrieved_doc_sources": [s.url for s in result.sources],
+                            "retrieval_scores": {},
+                            "algorithms_used": ["deep_research"],
+                            "web_search_triggered": True,
+                            "web_urls_searched": [s.url for s in result.sources],
+                            "web_snippets": [],
+                            "search_mode": "deep_research",
+                            "synthesis_model": "",
+                            "answer_summary": (result.report or "")[:300],
+                            "total_time_ms": result.research_time_ms,
+                            "created_at": _datetime.utcnow().isoformat(),
+                        })
+                        
+                        # 2. Save web interaction logs for each source
+                        web_logs = []
+                        for src in result.sources:
+                            web_logs.append({
+                                "session_id": request.chat_id,
+                                "turn_index": turn_index,
+                                "provider": "deep_research",
+                                "query_sent": request.query,
+                                "url": src.url,
+                                "title": src.title,
+                                "snippet": "",
+                                "relevance_score": src.relevance_score,
+                            })
+                        if web_logs:
+                            rag_system.chat_storage.save_web_interaction_logs(web_logs)
+                        
+                        # 3. Save a memory fragment with research summary
+                        rag_system.chat_storage.save_memory_fragment({
+                            "fragment_id": str(_mem_uuid.uuid4()),
+                            "session_id": request.chat_id,
+                            "fragment_type": "deep_research_summary",
+                            "content": f"Deep Research: {request.query}\n\n{(result.report or '')[:1000]}",
+                            "tags": ["deep_research", session_id],
+                            "namespace": "global",
+                            "importance_score": 0.8,
+                            "access_count": 0,
+                            "created_at": _datetime.utcnow().isoformat(),
+                        })
+                        
+                        logger.info(f"Deep research memory saved for chat {request.chat_id}: {len(web_logs)} web logs, 1 trace, 1 fragment")
+                    except Exception as mem_err:
+                        logger.warning(f"Deep research memory post-processing failed (non-fatal): {mem_err}")
+                
+            except Exception as e:
+                logger.error(f"Background research failed: {e}")
+                if rag_system and hasattr(rag_system, 'chat_storage'):
+                    rag_system.chat_storage.update_research_session(session_id, {
+                        "status": "error",
+                        "completed_at": _datetime.utcnow().isoformat(),
+                    })
+        
+        task = asyncio.create_task(_run())
+        _research_tasks[session_id] = task
+        
+        return {
+            "session_id": session_id,
+            "status": "planning",
+            "message": "Deep research started. Poll /research/{session_id}/status for updates.",
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to start research: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/research/{session_id}/status")
+async def get_research_status(session_id: str):
+    """Get the current status and progress events of a research session."""
+    try:
+        orchestrator = _get_deep_research()
+        
+        # Check in-memory state first (active session)
+        session = orchestrator.get_session_status(session_id)
+        if session:
+            return DeepResearchStatusResponse(
+                session_id=session_id,
+                status=session.get("status", ResearchStatus.IDLE).value
+                    if isinstance(session.get("status"), ResearchStatus)
+                    else str(session.get("status", "idle")),
+                sources_scraped=session.get("sources_scraped", 0),
+                total_findings=session.get("total_findings", 0),
+                progress_events=session.get("progress_events", []),
+                plan=session.get("plan"),
+            ).model_dump()
+        
+        # Fall back to DB
+        if rag_system and hasattr(rag_system, 'chat_storage'):
+            db_session = rag_system.chat_storage.get_research_session(session_id)
+            if db_session:
+                progress = rag_system.chat_storage.get_research_progress(session_id)
+                return DeepResearchStatusResponse(
+                    session_id=session_id,
+                    status=db_session.get("status", "idle"),
+                    sources_scraped=db_session.get("sources_scraped", 0),
+                    total_findings=db_session.get("findings_count", 0),
+                    progress_events=[p.get("data", p) for p in progress],
+                    plan=db_session.get("plan"),
+                ).model_dump()
+        
+        raise HTTPException(status_code=404, detail="Research session not found")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get research status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/research/{session_id}/stop")
+async def stop_research(session_id: str):
+    """Stop an in-progress research session. Triggers early synthesis."""
+    try:
+        orchestrator = _get_deep_research()
+        orchestrator.cancel(session_id)
+        
+        return {
+            "status": "cancelling",
+            "message": "Research will stop after the current step and synthesize available findings.",
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to stop research: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/research/{session_id}/result")
+async def get_research_result(session_id: str):
+    """Get the final research report and sources."""
+    try:
+        orchestrator = _get_deep_research()
+        
+        # Check in-memory
+        session = orchestrator.get_session_status(session_id)
+        if session and session.get("report"):
+            sources = session.get("sources", [])
+            return {
+                "session_id": session_id,
+                "query": session.get("query", ""),
+                "report": session.get("report", ""),
+                "sources": sources,
+                "status": session.get("status", ResearchStatus.IDLE).value
+                    if isinstance(session.get("status"), ResearchStatus)
+                    else str(session.get("status", "idle")),
+                "sources_scraped": session.get("sources_scraped", 0),
+                "total_findings": session.get("total_findings", 0),
+            }
+        
+        # Fall back to DB
+        if rag_system and hasattr(rag_system, 'chat_storage'):
+            db_session = rag_system.chat_storage.get_research_session(session_id)
+            if db_session:
+                return {
+                    "session_id": session_id,
+                    "query": db_session.get("query", ""),
+                    "report": db_session.get("report", ""),
+                    "sources": [],
+                    "status": db_session.get("status", "idle"),
+                    "sources_scraped": db_session.get("sources_scraped", 0),
+                    "total_findings": db_session.get("findings_count", 0),
+                }
+        
+        raise HTTPException(status_code=404, detail="Research session not found")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get research result: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/research/{session_id}/stream")
+async def stream_research_progress(session_id: str):
+    """SSE stream of research progress events."""
+    from starlette.responses import StreamingResponse
+
+    orchestrator = _get_deep_research()
+
+    async def event_generator():
+        last_idx = 0
+        while True:
+            session = orchestrator.get_session_status(session_id)
+            if not session:
+                yield f"data: {{\"event_type\": \"error\", \"current_activity\": \"Session not found\"}}\n\n"
+                break
+
+            events = session.get("progress_events", [])
+            # Send new events since last check
+            for event in events[last_idx:]:
+                import json as _json
+                yield f"data: {_json.dumps(event)}\n\n"
+            last_idx = len(events)
+
+            status = session.get("status")
+            status_val = status.value if isinstance(status, ResearchStatus) else str(status)
+            if status_val in ("complete", "cancelled", "error"):
+                yield f"data: {{\"event_type\": \"done\", \"status\": \"{status_val}\"}}\n\n"
+                break
+
+            await asyncio.sleep(1)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8010)

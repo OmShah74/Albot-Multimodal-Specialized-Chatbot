@@ -152,9 +152,41 @@ class SQLiteStorageManager:
                         FOREIGN KEY (session_id) REFERENCES chats (id) ON DELETE CASCADE
                     )
                 """)
+
+                # ── Deep Research tables ──────────────────────
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS deep_research_sessions (
+                        id TEXT PRIMARY KEY,
+                        chat_id TEXT NOT NULL,
+                        query TEXT NOT NULL,
+                        status TEXT NOT NULL DEFAULT 'idle',
+                        config TEXT,
+                        plan TEXT,
+                        report TEXT,
+                        graph_data TEXT,
+                        sources_scraped INTEGER DEFAULT 0,
+                        findings_count INTEGER DEFAULT 0,
+                        total_time_ms REAL DEFAULT 0,
+                        created_at TEXT NOT NULL,
+                        completed_at TEXT,
+                        FOREIGN KEY (chat_id) REFERENCES chats (id) ON DELETE CASCADE
+                    )
+                """)
+
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS research_progress_log (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        session_id TEXT NOT NULL,
+                        event_type TEXT NOT NULL,
+                        step_index INTEGER,
+                        data TEXT,
+                        created_at TEXT NOT NULL,
+                        FOREIGN KEY (session_id) REFERENCES deep_research_sessions (id) ON DELETE CASCADE
+                    )
+                """)
                 
                 conn.commit()
-                logger.info("SQLite database initialized (core + memory tables)")
+                logger.info("SQLite database initialized (core + memory + deep research tables)")
         except Exception as e:
             logger.error(f"Failed to initialize SQLite DB: {e}")
             raise
@@ -790,3 +822,133 @@ class SQLiteStorageManager:
         except Exception as e:
             logger.error(f"Failed to clone fragments: {e}")
 
+    # ═══════════════════════════════════════════════════
+    # Deep Research Session Management
+    # ═══════════════════════════════════════════════════
+
+    def create_research_session(self, session_data: Dict) -> str:
+        """Create a new deep research session."""
+        session_id = session_data.get("id", str(uuid.uuid4()))
+        now = datetime.utcnow().isoformat()
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO deep_research_sessions
+                    (id, chat_id, query, status, config, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (
+                    session_id,
+                    session_data.get("chat_id", "default"),
+                    session_data.get("query", ""),
+                    session_data.get("status", "idle"),
+                    json.dumps(session_data.get("config", {})),
+                    now,
+                ))
+                conn.commit()
+            logger.info(f"Created deep research session {session_id}")
+            return session_id
+        except Exception as e:
+            logger.error(f"Failed to create research session: {e}")
+            raise
+
+    def update_research_session(self, session_id: str, updates: Dict):
+        """Update a deep research session."""
+        try:
+            allowed_fields = {
+                "status", "plan", "report", "graph_data",
+                "sources_scraped", "findings_count", "total_time_ms", "completed_at"
+            }
+            set_clauses = []
+            values = []
+            for key, value in updates.items():
+                if key in allowed_fields:
+                    set_clauses.append(f"{key} = ?")
+                    if isinstance(value, (dict, list)):
+                        values.append(json.dumps(value))
+                    else:
+                        values.append(value)
+            
+            if not set_clauses:
+                return
+            
+            values.append(session_id)
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    f"UPDATE deep_research_sessions SET {', '.join(set_clauses)} WHERE id = ?",
+                    values
+                )
+                conn.commit()
+        except Exception as e:
+            logger.error(f"Failed to update research session {session_id}: {e}")
+
+    def get_research_session(self, session_id: str) -> Optional[Dict]:
+        """Get a deep research session by ID."""
+        try:
+            with self._get_connection() as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM deep_research_sessions WHERE id = ?", (session_id,))
+                row = cursor.fetchone()
+                if row:
+                    result = dict(row)
+                    # Parse JSON fields
+                    for field in ["config", "plan"]:
+                        if result.get(field):
+                            try:
+                                result[field] = json.loads(result[field])
+                            except (json.JSONDecodeError, TypeError):
+                                pass
+                    return result
+                return None
+        except Exception as e:
+            logger.error(f"Failed to get research session {session_id}: {e}")
+            return None
+
+    def save_research_progress(self, session_id: str, event: Dict):
+        """Save a research progress event."""
+        now = datetime.utcnow().isoformat()
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO research_progress_log
+                    (session_id, event_type, step_index, data, created_at)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (
+                    session_id,
+                    event.get("event_type", "unknown"),
+                    event.get("step_index"),
+                    json.dumps(event),
+                    now,
+                ))
+                conn.commit()
+        except Exception as e:
+            logger.error(f"Failed to save research progress: {e}")
+
+    def get_research_progress(self, session_id: str) -> List[Dict]:
+        """Get all progress events for a research session."""
+        try:
+            with self._get_connection() as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT * FROM research_progress_log
+                    WHERE session_id = ?
+                    ORDER BY id ASC
+                """, (session_id,))
+                rows = cursor.fetchall()
+                results = []
+                for row in rows:
+                    r = dict(row)
+                    if r.get("data"):
+                        try:
+                            r["data"] = json.loads(r["data"])
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+                    results.append(r)
+                return results
+        except Exception as e:
+            logger.error(f"Failed to get research progress: {e}")
+            return []

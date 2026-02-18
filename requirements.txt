@@ -84,3 +84,6 @@ diskcache
 
 # Rate Limiting
 ratelimit
+
+# Deep Research
+trafilatura

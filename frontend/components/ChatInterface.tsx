@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Send, Paperclip, Bot, User, Trash2, StopCircle, Zap, Settings2, Clock, ChevronDown, ChevronUp, Activity, X, Globe, FileText, BookOpen, Brain, MessageSquare, Database, Search, Mic, MicOff } from 'lucide-react';
+import { Send, Paperclip, Bot, User, Trash2, StopCircle, Zap, Settings2, Clock, ChevronDown, ChevronUp, Activity, X, Globe, FileText, BookOpen, Brain, MessageSquare, Database, Search, Mic, MicOff, Microscope } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import axios from 'axios';
 import { api, Message, RetrievalConfig, QueryMetrics } from '@/lib/api';
@@ -10,6 +10,7 @@ import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { Copy, Check } from 'lucide-react';
+import DeepResearchPanel from './DeepResearchPanel';
 
 interface ChatInterfaceProps {
   chatId: string | null;
@@ -95,8 +96,14 @@ export function ChatInterface({ chatId, onChatUpdated, onCreateSession }: ChatIn
   const [memoryLoading, setMemoryLoading] = useState(false);
   const [memoryTab, setMemoryTab] = useState<'conversation' | 'fragments' | 'web' | 'traces'>('conversation');
 
-  // Search mode: web_search (with fallback) or knowledge_base (local only)
-  const [searchMode, setSearchMode] = useState<'web_search' | 'knowledge_base'>('knowledge_base');
+  // Search mode: web_search (with fallback), knowledge_base (local only), or deep_research
+  const [searchMode, setSearchMode] = useState<'web_search' | 'knowledge_base' | 'deep_research'>('knowledge_base');
+
+  // Deep Research state
+  const [deepResearchSessionId, setDeepResearchSessionId] = useState<string | null>(null);
+  const [isDeepResearching, setIsDeepResearching] = useState(false);
+
+  const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8010';
 
   // Abort controller for stopping queries
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -257,6 +264,7 @@ export function ChatInterface({ chatId, onChatUpdated, onCreateSession }: ChatIn
 
     const userMsg: Message = { role: 'user', content: input };
     setHistory(prev => [...prev, userMsg]);
+    const queryText = input;
     setInput('');
     setLoading(true);
 
@@ -282,8 +290,34 @@ export function ChatInterface({ chatId, onChatUpdated, onCreateSession }: ChatIn
         return;
       }
     }
+
+    // ─── Deep Research Mode ───
+    if (searchMode === 'deep_research') {
+      try {
+        const res = await api.startResearch(queryText, activeChatId!);
+        setDeepResearchSessionId(res.session_id);
+        setIsDeepResearching(true);
+        setLoading(false);
+
+        if (onChatUpdated && activeChatId) {
+          const researchTitle = `🔬 ${queryText.slice(0, 40)}...`;
+          onChatUpdated(activeChatId, { title: researchTitle });
+          try { await api.renameChat(activeChatId, researchTitle); } catch {}
+        }
+        return;
+      } catch (err) {
+        console.error('Failed to start deep research:', err);
+        showNotification({
+          type: 'error',
+          title: 'Research Failed',
+          message: 'Could not start deep research. Check backend status.'
+        });
+        setLoading(false);
+        return;
+      }
+    }
     
-    // Create a new AbortController for this request
+    // ─── Normal Query Mode ───
     const controller = new AbortController();
     abortControllerRef.current = controller;
 
@@ -644,7 +678,7 @@ export function ChatInterface({ chatId, onChatUpdated, onCreateSession }: ChatIn
             </motion.div>
           ))}
           
-          {loading && (
+          {loading && !isDeepResearching && (
              <motion.div 
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
@@ -663,6 +697,44 @@ export function ChatInterface({ chatId, onChatUpdated, onCreateSession }: ChatIn
                     Thinking & Retrieving Evidence...
                  </p>
                </div>
+            </motion.div>
+          )}
+
+          {/* Deep Research Panel */}
+          {isDeepResearching && deepResearchSessionId && (
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+            >
+              <DeepResearchPanel
+                sessionId={deepResearchSessionId}
+                query={history.filter(m => m.role === 'user').pop()?.content || ''}
+                apiBaseUrl={API_BASE}
+                onComplete={(report: string, sources: string[], metrics?: any) => {
+                  // Avoid duplication if the message with this content already exists
+                  setHistory(prev => {
+                    const exists = prev.some(m => m.role === 'assistant' && m.content === report);
+                    if (exists) return prev;
+                    
+                    const researchMsg: Message = {
+                      role: 'assistant',
+                      content: report,
+                      sources: sources,
+                      metrics: metrics || { type: 'deep_research' } 
+                    };
+                    return [...prev, researchMsg];
+                  });
+                  if (metrics) {
+                    setLastMetrics(metrics);
+                  }
+                  setIsDeepResearching(false);
+                  setDeepResearchSessionId(null);
+                }}
+                onCancel={() => {
+                  setIsDeepResearching(false);
+                  setDeepResearchSessionId(null);
+                }}
+              />
             </motion.div>
           )}
         </AnimatePresence>
@@ -698,6 +770,18 @@ export function ChatInterface({ chatId, onChatUpdated, onCreateSession }: ChatIn
                 >
                   <Globe className="w-3.5 h-3.5" />
                   Web Search
+                </button>
+                <button
+                  onClick={() => setSearchMode('deep_research')}
+                  className={cn(
+                    "flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-all",
+                    searchMode === 'deep_research' 
+                      ? "bg-purple-600 text-white shadow-lg shadow-purple-600/20" 
+                      : "text-neutral-400 hover:text-neutral-200"
+                  )}
+                >
+                  <Microscope className="w-3.5 h-3.5" />
+                  Deep Research
                 </button>
               </div>
 
@@ -794,7 +878,7 @@ export function ChatInterface({ chatId, onChatUpdated, onCreateSession }: ChatIn
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder={isListening ? 'Listening...' : `Ask Albot anything... (${searchMode === 'knowledge_base' ? '📚 KB' : '🌐 Web'} · ${retrievalMode} RAG)`}
+            placeholder={isListening ? 'Listening...' : `Ask Albot anything... (${searchMode === 'deep_research' ? '🔬 Deep Research' : searchMode === 'knowledge_base' ? '📚 KB' : '🌐 Web'} · ${retrievalMode} RAG)`}
             className={cn(
               "w-full input-glass rounded-2xl py-4 pl-5 text-sm focus:outline-none transition-all placeholder:text-neutral-500 text-white shadow-2xl",
               isListening ? "pr-28 border-red-500/30 shadow-[0_0_20px_rgba(239,68,68,0.1)]" : "pr-24"
@@ -939,19 +1023,45 @@ export function ChatInterface({ chatId, onChatUpdated, onCreateSession }: ChatIn
                         <Zap className="w-4 h-4 text-primary" />
                         <h3 className="text-xs font-black uppercase tracking-[0.2em] text-neutral-400">Current Turn Analysis</h3>
                       </div>
-                      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                        {[
-                          { label: 'Vector Search', value: lastMetrics.vector_time_ms, color: 'text-white' },
-                          { label: 'Graph Traversal', value: lastMetrics.graph_time_ms, color: 'text-white' },
-                          { label: 'BM25 / Algos', value: lastMetrics.bm25_time_ms, color: 'text-white' },
-                          { label: 'AI Synthesis', value: lastMetrics.synthesis_time_ms, color: 'text-primary' }
-                        ].map((stat, i) => (
-                          <div key={i} className="bg-white/5 p-4 rounded-2xl border border-white/5 flex flex-col gap-1">
-                            <span className="text-[9px] uppercase tracking-widest text-neutral-500 font-black">{stat.label}</span>
-                            <span className={cn("text-xl font-bold tracking-tight", stat.color)}>{stat.value.toFixed(1)}<span className="text-xs ml-0.5 opacity-50">ms</span></span>
-                          </div>
-                        ))}
-                      </div>
+                       {lastMetrics.type === 'deep_research' ? (
+                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div className="bg-purple-600/10 p-5 rounded-2xl border border-purple-500/20 flex flex-col gap-1 shadow-lg shadow-purple-500/5">
+                              <span className="text-[10px] uppercase tracking-widest text-purple-400 font-black">Total Research Time</span>
+                              <span className="text-2xl font-black tracking-tighter text-white">
+                                {(lastMetrics.total_time_ms / 1000).toFixed(1)}<span className="text-sm ml-1 opacity-50 uppercase">sec</span>
+                              </span>
+                            </div>
+                            <div className="bg-blue-600/10 p-5 rounded-2xl border border-blue-500/20 flex flex-col gap-1 shadow-lg shadow-blue-500/5">
+                              <span className="text-[10px] uppercase tracking-widest text-blue-400 font-black">Sources Discovered</span>
+                              <span className="text-2xl font-black tracking-tighter text-white">
+                                {lastMetrics.total_sources || 0}<span className="text-sm ml-1 opacity-50 uppercase">links</span>
+                              </span>
+                            </div>
+                            <div className="bg-emerald-600/10 p-5 rounded-2xl border border-emerald-500/20 flex flex-col gap-1 shadow-lg shadow-emerald-500/5">
+                              <span className="text-[10px] uppercase tracking-widest text-emerald-400 font-black">Knowledge Extracted</span>
+                              <span className="text-2xl font-black tracking-tighter text-white">
+                                {lastMetrics.total_findings || 0}<span className="text-sm ml-1 opacity-50 uppercase">facts</span>
+                              </span>
+                            </div>
+                         </div>
+                       ) : (
+                         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                           {[
+                             { label: 'Vector Search', value: lastMetrics.vector_time_ms, color: 'text-white' },
+                             { label: 'Graph Traversal', value: lastMetrics.graph_time_ms, color: 'text-white' },
+                             { label: 'BM25 / Algos', value: lastMetrics.bm25_time_ms, color: 'text-white' },
+                             { label: 'AI Synthesis', value: lastMetrics.synthesis_time_ms, color: 'text-primary' }
+                           ].map((stat, i) => (
+                             <div key={i} className="bg-white/5 p-4 rounded-2xl border border-white/5 flex flex-col gap-1">
+                               <span className="text-[9px] uppercase tracking-widest text-neutral-500 font-black">{stat.label}</span>
+                               <span className={cn("text-xl font-bold tracking-tight", stat.color)}>
+                                 {typeof stat.value === 'number' ? stat.value.toFixed(1) : '—'}
+                                 <span className="text-xs ml-0.5 opacity-50">ms</span>
+                               </span>
+                             </div>
+                           ))}
+                         </div>
+                       )}
                       
                       {lastMetrics.web_search_used && (
                         <div className="mt-4 grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -982,14 +1092,14 @@ export function ChatInterface({ chatId, onChatUpdated, onCreateSession }: ChatIn
                    </div>
                  )}
 
-                 {history.filter(m => m.role === 'assistant' && m.metrics).length > 0 && (
+                 {history.filter(m => m.role === 'assistant' && m.metrics && m.metrics.total_time_ms != null).length > 0 && (
                    <section className="space-y-4">
                       <div className="flex items-center gap-2 px-1">
                         <Clock className="w-4 h-4 text-neutral-500" />
                         <h3 className="text-xs font-black uppercase tracking-[0.2em] text-neutral-400">Conversation History</h3>
                       </div>
                       <div className="space-y-2">
-                         {history.filter(m => m.role === 'assistant' && m.metrics).map((m, i) => (
+                         {history.filter(m => m.role === 'assistant' && m.metrics && m.metrics.total_time_ms != null).map((m, i) => (
                            <div 
                             key={i} 
                             className={cn(
@@ -1003,7 +1113,7 @@ export function ChatInterface({ chatId, onChatUpdated, onCreateSession }: ChatIn
                               <div className="flex items-center gap-4">
                                 <span className="w-8 h-8 rounded-lg bg-white/5 flex items-center justify-center text-[10px] font-black text-neutral-500 border border-white/10 group-hover:text-white transition-colors">T{i+1}</span>
                                 <div className="flex flex-col">
-                                  <span className="text-sm font-bold text-neutral-200">{m.metrics?.total_time_ms.toFixed(0)}ms Total</span>
+                                  <span className="text-sm font-bold text-neutral-200">{m.metrics?.total_time_ms != null ? `${m.metrics.total_time_ms.toFixed(0)}ms Total` : 'Deep Research'}</span>
                                   <span className="text-[9px] uppercase tracking-widest text-neutral-500 font-bold">{m.content.slice(0, 80).replace(/\*\*/g, '')}...</span>
                                 </div>
                               </div>
