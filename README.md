@@ -58,6 +58,14 @@
 - **Integrated Web Search**: Falls back to live web search (DuckDuckGo) for real-time information retrieval when internal knowledge is insufficient.
 - **Real-time Streaming**: Token-by-token streaming responses for a responsive user experience.
 
+### 🕵️‍♂️ Deep Research & RLM Framework (New)
+
+- **Agentic Research Loop**: Autonomous research agent that plans, searches, scrapes, and synthesizes information across multiple steps.
+- **RLM (Recursive Language Model)**: Implements a recursive decomposition paradigm for infinite context processing. It treats large documents as external environment variables, recursively extracting and merging findings via map-reduce.
+- **Autonomous Planning**: LLM-driven research planner that decomposes complex queries into multiple targeted search steps.
+- **Context Graph Construction**: Dynamic graph-based state management that tracks research provenance, findings, and syntheses in real-time.
+- **High-Fidelity Synthesis**: Multi-stage aggregation logic that condenses hundreds of extracted facts into a structured, professional research report.
+
 ### 🛡️ Deployment
 
 - **Docker-First Architecture**: Fully containerized backend and database for consistent deployment.
@@ -114,6 +122,7 @@ graph TD
 | **Graph Algorithms** | NetworkX               | Centrality, PageRank, Community Detection   |
 | **Audio/Video**      | Whisper, MoviePy       | SOTA transcription and media processing     |
 | **Web Search**       | DuckDuckGo             | Private, non-tracking web search            |
+| **Deep Research**    | RLM + Context Graph    | Infinite context recursive synthesis        |
 | **Task Queue**       | AsyncIO                | Non-blocking concurrency                    |
 
 ### Frontend

@@ -152,6 +152,28 @@ This is a **production-ready** implementation of the advanced multimodal RAG sys
    - `relevance(f)`: Initial LLM-assigned importance score
    - `ω`: Weight vector (0.3, 0.4, 0.3)
 
+8. **Infinite Context Recursive Language Model (RLM)** (New!)
+
+   The RLM implements a recursive extraction function $E$ for a query $Q$ on a document $D$. For a context limit $C_{limit}$:
+   - **Base Case**: If $|D| \leq C_{limit}$
+     $E(D, Q) = LLM\_Extract(D, Q)$
+   - **Recursive Step**: If $|D| > C_{limit}$
+     $D = \bigcup_{i=1}^{m} d_i$ (Semantic Decomposition)
+     $E(D, Q) = Aggregate(\{E(d_i, Q) \mid i \in [1, m]\})$ (Deep-Limited Map-Reduce)
+
+   This enables processing of arbitrarily large datasets (books, long-tail logs, web pages) without losing semantic coherence.
+
+9. **Context Graph Provenance Mapping** (New!)
+
+   The system maintains a directed acyclic graph (DAG) $\mathcal{G} = (V, E)$ to track research state:
+   - **Nodes ($V$)**: `Session`, `Plan`, `Step`, `Source`, `Finding`, `Synthesis`
+   - **Edges ($E$)**:
+     - $(Session \to Plan)$: `GENERATED_PLAN`
+     - $(Plan \to Step)$: `CONTAINS_STEP`
+     - $(Step \to Source)$: `DISCOVERED_SOURCE`
+     - $(Source \to Finding)$: `EXTRACTED_FINDING`
+     - $(Finding \to Synthesis)$: `SYNTHESIZED_FROM`
+
 ---
 
 ## 🧠 Advanced Memory Architecture
