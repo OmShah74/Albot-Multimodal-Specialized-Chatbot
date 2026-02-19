@@ -294,9 +294,9 @@ Synthesize these findings:"""
 
 Requirements:
 1. Write a well-structured report with clear sections and headers using markdown
-2. Start with an executive summary
+2. Start with an executive summary without the label "Executive Summary"
 3. Organize the body by themes/topics, NOT by research steps
-4. Include specific facts, statistics, and key insights from the research
+4. Include specific facts, statistics, and key insights from the research. Inculcate tabular format if need be
 5. Note areas of consensus and disagreement among sources
 6. Conclude with key takeaways and implications
 7. Maintain an academic/professional tone throughout
@@ -304,7 +304,7 @@ Requirements:
 9. Reference sources where appropriate using [Source Title](URL) format
 10. EVERY claim should be grounded in the research findings — no hallucination
 
-The report should be thorough (800-2000 words) and provide genuinely useful insights."""
+The report should be thorough (3000-6000 words) and provide genuinely useful insights."""
 
         user_prompt = f"""Research question: "{research_query}"
 
@@ -313,8 +313,6 @@ Research covered {graph_stats.get('sources', 0)} sources with {graph_stats.get('
 Per-step research syntheses:
 {steps_text}
 
-Sources consulted:
-{source_list}
 
 Write the comprehensive research report:"""
 

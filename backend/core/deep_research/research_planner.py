@@ -18,7 +18,7 @@ class ResearchPlanner:
     
     The planner:
     1. Analyzes the user's research query
-    2. Generates an ordered plan of 3–8 research steps
+    2. Generates an ordered plan of 10-12 research steps
     3. Creates targeted search queries for each step
     4. Can adapt the plan mid-research based on findings
     5. Evaluates whether enough information has been gathered
@@ -43,7 +43,7 @@ class ResearchPlanner:
         system_prompt = f"""You are a research planning expert. Given a research query, create a comprehensive research plan.
 
 Rules:
-- Create between 3 and {max_steps} focused research steps
+- Create between 8 and 12 focused research steps
 - Each step should have a clear title, description, and 2-4 specific web search queries 
 - Steps should be logically ordered (background → specifics → analysis → synthesis)
 - Search queries should be specific and diverse (don't repeat the same query)
@@ -122,7 +122,7 @@ Output format:
         """
         system_prompt = """You are a research assistant. Based on the current research findings, generate 2-3 follow-up search queries that:
 1. Fill gaps in the current understanding
-2. Explore interesting angles discovered in the findings
+2. Explore interesting angles discovered in the findings while not deviating from the user's problem statement domain
 3. Look for contradicting or supporting evidence
 
 Respond ONLY with a JSON array of query strings, e.g.: ["query 1", "query 2"]"""
