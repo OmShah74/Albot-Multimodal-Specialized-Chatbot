@@ -26,10 +26,10 @@ class WebSearchEngine:
     
     def __init__(self):
         self.providers = [
-            DuckDuckGoProvider(max_results=6),
-            WikipediaProvider(max_results=3),
-            BingSearchProvider(max_results=5),
-            GoogleScraperProvider(max_results=5),
+            DuckDuckGoProvider(max_results=8),
+            # WikipediaProvider(max_results=3),
+            BingSearchProvider(max_results=6),
+            GoogleScraperProvider(max_results=8),
         ]
         logger.info(f"WebSearchEngine initialized with {len(self.providers)} providers")
     
@@ -51,6 +51,10 @@ class WebSearchEngine:
             query, 
             flags=re.IGNORECASE
         ).strip()
+
+        # Step 0b: Strip any site: operators — they don't work with our providers
+        # and cause zero-result failures. Convert to plain keywords instead.
+        clean_query = self._strip_search_operators(clean_query)
         
         logger.info(f"Original query: '{query}' -> Cleaned: '{clean_query}'")
         
@@ -58,27 +62,23 @@ class WebSearchEngine:
         provider_results = await self._parallel_search(clean_query)
         
         # Step 2: Fuse results
-        fused = self._fuse_results(provider_results, query, top_k)
+        fused = self._fuse_results(provider_results, clean_query, top_k)
         
         # Step 3: Deep Search (Adaptive)
-        # If results are poor or query implies "latest" news, try variations
+        # If results are poor, try a simplified fallback query
         if len(fused) < 4:
             logger.info(f"Deep Search Triggered: Initial results ({len(fused)}) insufficient. Expanding...")
             
-            variations = []
-            if "latest" not in clean_query.lower():
-                variations.append(f"latest {clean_query}")
-            if "news" not in clean_query.lower():
-                variations.append(f"{clean_query} news")
+            variations = self._generate_fallback_queries(clean_query)
             
             # Execute variation searches
-            for var_query in variations[:2]: # Limit to 2 variations
+            for var_query in variations[:2]:
                 logger.info(f"Deep Search Variation: {var_query}")
                 extra_results = await self._parallel_search(var_query)
                 provider_results.extend(extra_results)
             
             # Re-fuse with all results
-            fused = self._fuse_results(provider_results, query, top_k)
+            fused = self._fuse_results(provider_results, clean_query, top_k)
         
         elapsed = (time.time() - start_time) * 1000
         
@@ -100,7 +100,85 @@ class WebSearchEngine:
         )
         
         return fused, metrics
-    
+
+    def _strip_search_operators(self, query: str) -> str:
+        """
+        Remove unsupported search operators (site:, filetype:, inurl:, etc.)
+        and convert them to plain keyword equivalents that work with all providers.
+        
+        The Bing scraper and Google scraper backends don't reliably support
+        these operators and return 0 results when they appear.
+        """
+        result = query.strip()
+
+        # Map known site: domains to useful plain-text keywords
+        site_keyword_map = {
+            "arxiv.org": "arxiv",
+            "medium.com": "",
+            "towardsdatascience.com": "",
+            "neurips.cc": "neurips",
+            "icml.cc": "icml",
+            "aclanthology.org": "acl",
+            "cvpr.thecvf.com": "cvpr",
+            "ieeexplore.ieee.org": "ieee",
+            "acm.org": "acm",
+            "researchgate.net": "",
+            "cv-foundation.org": "cvpr",
+            "openreview.net": "",
+            "semanticscholar.org": "",
+            "springer.com": "",
+            "nature.com": "",
+            "sciencedirect.com": "",
+        }
+
+        site_pattern = re.compile(r'site:([^\s]+)', re.IGNORECASE)
+        for match in site_pattern.finditer(result):
+            domain = match.group(1).lower()
+            replacement_keyword = ""
+            for known_domain, keyword in site_keyword_map.items():
+                if known_domain in domain:
+                    replacement_keyword = keyword
+                    break
+            # Remove the operator
+            result = result.replace(match.group(0), replacement_keyword).strip()
+
+        # Remove other unsupported operators
+        for op_pattern in [r'filetype:\S+', r'inurl:\S+', r'intitle:\S+', r'inanchor:\S+', r'cache:\S+']:
+            result = re.sub(op_pattern, '', result, flags=re.IGNORECASE)
+
+        # Normalize whitespace
+        result = re.sub(r'\s+', ' ', result).strip()
+
+        if result != query.strip():
+            logger.debug(f"[WebSearch] Operator stripped: '{query}' -> '{result}'")
+
+        return result if result else query.strip()
+
+    def _generate_fallback_queries(self, query: str) -> List[str]:
+        """
+        Generate fallback queries when the original returns poor results.
+        Strategy: simplify the query by taking the first 3-4 meaningful words,
+        rather than prepending "latest" or "news" which can make things worse.
+        """
+        fallbacks = []
+        
+        # Strategy 1: Take just the core terms (first 4 words)
+        words = query.split()
+        if len(words) > 4:
+            fallbacks.append(" ".join(words[:4]))
+        
+        # Strategy 2: Remove year tokens if present (they can restrict results)
+        year_stripped = re.sub(r'\b(20\d{2})\b', '', query).strip()
+        year_stripped = re.sub(r'\s+', ' ', year_stripped).strip()
+        if year_stripped and year_stripped != query and len(year_stripped) > 5:
+            fallbacks.append(year_stripped)
+        
+        # Strategy 3: Add "paper" or "research" as a generic broadener
+        if "paper" not in query.lower() and "research" not in query.lower():
+            fallbacks.append(f"{query} research")
+        
+        return fallbacks[:2]
+
     async def _parallel_search(self, query: str) -> List[List[SearchResult]]:
         """Execute all provider searches in parallel."""
         tasks = [provider.search(query) for provider in self.providers]
@@ -117,6 +195,19 @@ class WebSearchEngine:
         
         return clean_results
     
+    # Domains to filter out of fused search results for deep research
+    BLOCKED_RESULT_DOMAINS = {
+        "wikipedia.org", "wikimedia.org", "wikibooks.org",
+        "wikiversity.org", "wiktionary.org", "wikiquote.org",
+        "wikisource.org", "simple.wikipedia.org",
+        "wikihow.com", "quora.com", "answers.com", "ehow.com",
+        # Chinese / non-English platforms
+        "zhihu.com", "baidu.com", "weibo.com", "csdn.net",
+        # General news (not research)
+        "ndtv.com", "timesofindia.com", "hindustantimes.com",
+        "indiatoday.in", "thehindu.com", "news18.com", "indianexpress.com",
+    }
+
     def _fuse_results(
         self, 
         all_results: List[List[SearchResult]], 
@@ -127,10 +218,11 @@ class WebSearchEngine:
         Multi-stage result fusion algorithm.
         
         1. URL-based deduplication
-        2. TF-IDF relevance scoring
-        3. Source diversity bonus (multi-provider agreement)
-        4. Recency bonus
-        5. Top-K selection
+        2. Blocked domain filtering (Wikipedia, low-quality sites)
+        3. TF-IDF relevance scoring
+        4. Source diversity bonus (multi-provider agreement)
+        5. Recency bonus
+        6. Top-K selection
         """
         # Step 1: Deduplicate by URL (normalized)
         seen_urls = {}
@@ -148,27 +240,44 @@ class WebSearchEngine:
         if not unique_results:
             return []
         
-        # Step 2: Compute TF-IDF relevance scores
+        # Step 2: Filter blocked domains
+        filtered_results = []
+        for r in unique_results:
+            domain = self._normalize_url(r.url).split("/")[0]
+            blocked = False
+            for bd in self.BLOCKED_RESULT_DOMAINS:
+                if bd in domain:
+                    blocked = True
+                    break
+            if not blocked:
+                filtered_results.append(r)
+        
+        unique_results = filtered_results
+        
+        if not unique_results:
+            return []
+        
+        # Step 3: Compute TF-IDF relevance scores
         query_terms = self._tokenize(query.lower())
         for r in unique_results:
             text = f"{r.title} {r.snippet}".lower()
             doc_terms = self._tokenize(text)
             r.relevance_score = self._compute_tfidf(query_terms, doc_terms)
         
-        # Step 3: Diversity bonus (reward multi-provider agreement)
+        # Step 4: Diversity bonus (reward multi-provider agreement)
         for r in unique_results:
             r.diversity_bonus = (r.provider_count - 1) * 0.15
         
-        # Step 4: Recency bonus
+        # Step 5: Recency bonus
         for r in unique_results:
             r.recency_score = self._compute_recency(r.date)
         
-        # Step 5: Compute final score and sort
+        # Step 6: Compute final score and sort
         for r in unique_results:
             r.final_score = (
-                r.relevance_score * 0.6 +   # Relevance is most important
-                r.diversity_bonus * 0.25 +   # Multi-provider agreement
-                r.recency_score * 0.15       # Recency matters less
+                r.relevance_score * 0.6 +
+                r.diversity_bonus * 0.25 +
+                r.recency_score * 0.15
             )
         
         unique_results.sort(key=lambda x: x.final_score, reverse=True)
@@ -179,16 +288,13 @@ class WebSearchEngine:
         """Normalize a URL for deduplication."""
         url = url.strip().rstrip("/")
         url = re.sub(r'^https?://(www\.)?', '', url)
-        # Remove query parameters and fragments
         url = url.split("?")[0].split("#")[0]
         return url.lower()
     
     def _tokenize(self, text: str) -> List[str]:
         """Simple tokenizer for TF-IDF."""
-        # Remove non-alphanumeric characters, split on whitespace
         text = re.sub(r'[^a-z0-9\s]', ' ', text)
         tokens = text.split()
-        # Remove very short tokens and common stopwords
         stopwords = {
             'the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been',
             'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will',
@@ -214,22 +320,19 @@ class WebSearchEngine:
         score = 0.0
         for term in query_terms:
             tf = doc_counter.get(term, 0) / doc_len
-            # Use log-scaled term frequency
             if tf > 0:
                 score += (1 + math.log(1 + tf))
         
-        # Normalize by query length
         return score / len(query_terms)
     
     def _compute_recency(self, date_str: Optional[str]) -> float:
         """Compute a recency score (0.0 to 1.0) based on date."""
         if not date_str:
-            return 0.0  # Unknown date gets no bonus
+            return 0.0
         
         try:
             from datetime import datetime, timezone
             
-            # Try common date formats
             for fmt in [
                 "%Y-%m-%dT%H:%M:%SZ",
                 "%Y-%m-%dT%H:%M:%S",

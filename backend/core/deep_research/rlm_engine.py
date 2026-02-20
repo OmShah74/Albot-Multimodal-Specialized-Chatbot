@@ -1,16 +1,24 @@
 """
-Recursive Language Model (RLM) Engine — Core implementation of the 
+Recursive Language Model (RLM) Engine — Core implementation of the
 Zhang et al. paradigm for infinite context processing.
 
 The RLM treats large content as an external environment variable rather than
 feeding it directly into the LLM context window. It recursively decomposes
 content into manageable chunks, extracts findings via sub-agent calls,
 and synthesizes using map-reduce patterns.
+
+Enhanced with:
+- Much deeper extraction prompts (8-15 findings per chunk instead of 2-5)
+- Query-specific report format generation
+- Multi-pass synthesis with recursive depth
+- Source-attributed inline citations
+- Expert-level academic writing quality
 """
 
+import json
 import uuid
 import re
-from typing import List, Optional
+from typing import List, Optional, Dict
 from loguru import logger
 
 from backend.core.deep_research.models import Finding
@@ -20,32 +28,35 @@ from backend.core.deep_research.context_graph import ResearchContextGraph
 class RecursiveResearchAgent:
     """
     RLM-based agent for extracting and synthesizing research findings.
-    
+
     Implements the 5-phase RLM algorithm:
     1. Environment Initialization — content loaded as external variables
     2. Programmatic Examination — peek at content structure
     3. Programmatic Decomposition — semantic chunking
     4. Recursive Invocation — llm_query for each chunk
     5. Synthesis — map-reduce aggregation of findings
-    
+
     Emergent behaviors:
     - Map-Reduce: summarize chunks → merge summaries
     - Semantic Binary Search: for targeted fact retrieval
+    - Multi-Resolution Extraction: variable detail per importance level
     """
 
     # Maximum chunk size that fits comfortably in a single LLM call
-    CHUNK_SIZE = 4000  # characters
-    CHUNK_OVERLAP = 200  # overlap for context continuity
+    CHUNK_SIZE = 5000  # characters — larger chunks for richer context
+    CHUNK_OVERLAP = 300  # overlap for context continuity
 
     def __init__(
         self,
         llm_router,
         context_graph: ResearchContextGraph,
-        depth_limit: int = 3
+        depth_limit: int = 3,
+        report_structure: Optional[List[Dict]] = None,
     ):
         self.llm = llm_router
         self.graph = context_graph
         self.depth_limit = depth_limit
+        self.report_structure = report_structure or []
 
     async def extract_findings(
         self,
@@ -58,21 +69,10 @@ class RecursiveResearchAgent:
     ) -> List[Finding]:
         """
         Extract structured findings from a scraped page using RLM decomposition.
-        
+
         This is the core RLM function:
         - If content fits in one chunk → direct extraction
         - If content is too large → decompose into chunks, extract per chunk, merge
-        
-        Args:
-            page_content: Full text content of the page
-            research_query: The research question guiding extraction
-            source_id: Graph node ID of the web source
-            source_url: URL for attribution
-            source_title: Title for attribution
-            step_node_id: Optional step node for graph linking
-            
-        Returns:
-            List of extracted findings
         """
         if not page_content or len(page_content.strip()) < 50:
             return []
@@ -101,7 +101,7 @@ class RecursiveResearchAgent:
     ) -> List[Finding]:
         """
         Recursive extraction — the llm_query function from the RLM paper.
-        
+
         Phase 4 of the RLM algorithm:
         - If content fits → direct LLM extraction (base case)
         - If too large → decompose → map extraction over chunks → reduce
@@ -119,7 +119,7 @@ class RecursiveResearchAgent:
         # Recursive case: decompose and map-reduce
         # Phase 3: Programmatic Decomposition
         chunks = self._chunk_content(content)
-        
+
         logger.debug(f"[RLM] Depth {depth}: Decomposed into {len(chunks)} chunks")
 
         # Phase 4: Map — extract findings from each chunk
@@ -147,22 +147,41 @@ class RecursiveResearchAgent:
         """
         Extract findings from a single chunk via LLM call.
         This is the "sub-agent" in the RLM paradigm.
-        """
-        system_prompt = """You are a research analyst extracting key findings from text.
 
-For the given research question, extract 2-5 key findings from the provided text.
-Each finding should be a self-contained, factual statement or insight.
+        Enhanced to extract 5-10 highly detailed findings per chunk.
+        """
+        system_prompt = """You are an expert research analyst performing deep extraction from academic and technical text.
+
+For the given research question, extract 5-10 detailed findings from the provided text. Each finding should be:
+- A substantial, self-contained piece of information (2-4 sentences minimum)
+- Include specific technical details: numbers, formulas, architecture names, method names, author names
+- Provide enough context that the finding is useful standalone
+- Classify the type accurately
+
+Types:
+- "definition": Formal definitions, terminology explanations
+- "methodology": Algorithms, architectures, techniques, procedures
+- "result": Empirical results, benchmark scores, performance metrics, statistics
+- "comparison": Comparisons between approaches, trade-offs, advantages/disadvantages
+- "insight": Novel observations, implications, connections between ideas
+- "citation": References to other important works, author attributions
+- "technical_detail": Implementation specifics, hyperparameters, design choices
 
 Respond ONLY with a JSON array in this format:
 [
   {
-    "content": "Clear, concise finding statement",
-    "extraction_type": "fact|statistic|quote|analysis|definition",
+    "content": "Detailed, substantial finding with specific technical details. Include numbers, names, and context.",
+    "extraction_type": "definition|methodology|result|comparison|insight|citation|technical_detail",
     "importance": 0.0-1.0
   }
 ]
 
-If the text contains no relevant information, return an empty array: []"""
+IMPORTANT:
+- Extract MORE findings, not fewer. Every substantive claim should be captured.
+- Include specific numbers, percentages, model names, dataset names, etc.
+- If the text contains formulas or equations, include them in the finding.
+- If the text references specific papers or authors, include those attributions.
+- If the text contains NO relevant information, return an empty array: []"""
 
         user_prompt = f"""Research question: "{query}"
 
@@ -173,23 +192,23 @@ Text to analyze:
 {chunk}
 ---
 
-Extract the key findings relevant to the research question:"""
+Extract ALL key findings relevant to the research question. Be thorough and detailed:"""
 
         try:
             response = self.llm.complete(
                 messages=[{"role": "user", "content": user_prompt}],
                 system_prompt=system_prompt,
-                max_tokens=1500,
+                max_tokens=3000,
                 temperature=0.3,
             )
-            
+
             findings_data = self._parse_json_response(response)
-            
+
             if not isinstance(findings_data, list):
                 return []
-            
+
             findings = []
-            for fd in findings_data[:5]:  # Cap at 5 per chunk
+            for fd in findings_data[:10]:  # Cap at 10 per chunk
                 if isinstance(fd, dict) and fd.get("content"):
                     findings.append(Finding(
                         id=str(uuid.uuid4()),
@@ -200,9 +219,9 @@ Extract the key findings relevant to the research question:"""
                         importance=min(1.0, max(0.0, float(fd.get("importance", 0.5)))),
                         depth=depth,
                     ))
-            
+
             return findings
-            
+
         except Exception as e:
             logger.warning(f"[RLM] Extraction failed at depth {depth}: {e}")
             return []
@@ -215,26 +234,33 @@ Extract the key findings relevant to the research question:"""
     ) -> str:
         """
         Map-reduce synthesis of all findings for one research step.
-        
-        Phase 5 of the RLM algorithm:
-        - Aggregates findings from all sources in this step
-        - Produces a per-step synthesis
+        Enhanced for much deeper, more detailed per-step synthesis.
         """
         findings = self.graph.get_findings_for_step(step_id)
-        
+
         if not findings:
             return f"No findings were extracted for step: {step_title}"
 
         # Format findings as context
         findings_text = self._format_findings(findings)
 
-        system_prompt = """You are a research synthesizer. Given a set of findings from multiple sources, create a concise synthesis that:
-1. Identifies the key themes and insights
-2. Notes any contradictions or debates
-3. Highlights the most important facts
-4. Maintains source attribution
+        system_prompt = """You are an expert research synthesizer. Given a set of extracted findings from multiple sources, create a DEEP, DETAILED synthesis that:
 
-Write in clear, professional prose (2-4 paragraphs). Do not use generic filler — every sentence should convey specific information."""
+1. Organizes findings by theme or sub-topic (NOT by source)
+2. Preserves ALL specific technical details — formulas, numbers, model names, benchmark scores
+3. Identifies patterns, contradictions, and areas of consensus
+4. Establishes connections between findings from different sources
+5. Maintains inline source attribution using [Source Title] format
+6. Provides expert-level analysis and commentary on the significance of findings
+7. Highlights methodological details, architectural innovations, and empirical evidence
+
+Requirements:
+- Write 4-8 substantive paragraphs (do NOT write a single short paragraph)
+- Every sentence must convey specific information — no filler or generic statements
+- Include technical vocabulary and domain-specific terminology
+- If findings contain formulas or equations, include them
+- If findings contain specific numbers or metrics, include them
+- DO NOT start with "The findings show..." or similar generic openers"""
 
         user_prompt = f"""Research question: "{research_query}"
 Step: "{step_title}"
@@ -242,16 +268,16 @@ Step: "{step_title}"
 Findings from {len(findings)} extractions:
 {findings_text}
 
-Synthesize these findings:"""
+Produce a deep, comprehensive synthesis of these findings:"""
 
         try:
             synthesis = self.llm.complete(
                 messages=[{"role": "user", "content": user_prompt}],
                 system_prompt=system_prompt,
-                max_tokens=1500,
+                max_tokens=3000,
                 temperature=0.4,
             )
-            
+
             # Add synthesis to graph
             finding_ids = [f.get("id", "") for f in findings if f.get("id")]
             self.graph.add_synthesis(
@@ -259,9 +285,9 @@ Synthesize these findings:"""
                 finding_ids=finding_ids,
                 depth=0,
             )
-            
+
             return synthesis
-            
+
         except Exception as e:
             logger.error(f"[RLM] Step synthesis failed: {e}")
             return f"Synthesis failed for step: {step_title}"
@@ -270,15 +296,17 @@ Synthesize these findings:"""
         self,
         research_query: str,
         step_syntheses: List[dict],
+        report_structure: Optional[List[Dict]] = None,
     ) -> str:
         """
         Final recursive synthesis across all steps.
-        
-        This produces the comprehensive research report by combining
-        all per-step syntheses with the full context graph.
+        Uses the query-specific report structure if available.
         """
         sources = self.graph.get_all_sources()
         graph_stats = self.graph.get_stats()
+
+        # Use provided structure or fall back to instance variable
+        structure = report_structure or self.report_structure
 
         # Build the combined synthesis input
         steps_text = ""
@@ -290,43 +318,69 @@ Synthesize these findings:"""
         for i, src in enumerate(sources, 1):
             source_list += f"{i}. [{src.title}]({src.url}) — {src.findings_count} findings\n"
 
-        system_prompt = """You are a senior research analyst producing a comprehensive research report.
+        # Build structure instructions
+        structure_instructions = ""
+        if structure:
+            structure_instructions = "\n\nUSE THE FOLLOWING CUSTOM REPORT STRUCTURE (these sections are MANDATORY):\n"
+            for i, section in enumerate(structure, 1):
+                title = section.get("section_title", f"Section {i}")
+                purpose = section.get("section_purpose", "")
+                expected = section.get("expected_content", "")
+                structure_instructions += f"\n## {i}. {title}\n"
+                if purpose:
+                    structure_instructions += f"   Purpose: {purpose}\n"
+                if expected:
+                    structure_instructions += f"   Expected content: {expected}\n"
+            structure_instructions += "\nYou MUST use these exact section titles. Do NOT add generic sections like 'Introduction', 'Background', 'Conclusion', or 'Appendix'."
 
-Requirements:
-1. Write a well-structured report with clear sections and headers using markdown
-2. Start with an executive summary without the label "Executive Summary"
-3. Organize the body by themes/topics, NOT by research steps
-4. Include specific facts, statistics, and key insights from the research. Inculcate tabular format if need be
-5. Note areas of consensus and disagreement among sources
-6. Conclude with key takeaways and implications
-7. Maintain an academic/professional tone throughout
-8. Use markdown formatting: headers (##, ###), bold, bullet points, and numbered lists
-9. Reference sources where appropriate using [Source Title](URL) format
-10. EVERY claim should be grounded in the research findings — no hallucination
+        system_prompt = f"""You are a world-class research analyst producing a comprehensive, expert-level research report.
 
-The report should be thorough (3000-6000 words) and provide genuinely useful insights."""
+CRITICAL REQUIREMENTS:
+1. The report must be 3000-8000 words — genuinely comprehensive and deeply detailed
+2. Every claim MUST be grounded in the research findings provided — absolutely no hallucination
+3. Include specific technical details throughout: formulas, numbers, architecture names, benchmark scores, author names
+4. Use inline citations in [Source Title](URL) format
+5. Include comparison tables where appropriate (markdown format)
+6. Write in an authoritative, expert academic tone
+7. Each section should contain multiple paragraphs with substantial technical content
+8. Include code snippets or pseudocode if the topic involves algorithms
+9. Include mathematical formulations if the topic involves formal methods
+10. DO NOT use generic filler paragraphs — every paragraph must add specific value
+
+STRUCTURE RULES:
+- DO NOT use generic sections ("Introduction", "Background and Context", "Limitations", "Conclusion", "Appendix")
+- Instead, use topic-specific section titles that reflect the actual content
+- Each section should be 400-1000 words
+- Use headers (##) for main sections and sub-headers (###) for subsections
+{structure_instructions}
+
+FORMATTING:
+- Use markdown: **bold** for key terms, `code` for technical names, tables for comparisons
+- Use numbered lists for steps/procedures, bullet points for features/properties
+- Include horizontal rules (---) between major sections for readability"""
 
         user_prompt = f"""Research question: "{research_query}"
 
-Research covered {graph_stats.get('sources', 0)} sources with {graph_stats.get('findings', 0)} total findings.
+Research covered {graph_stats.get('sources', 0)} sources with {graph_stats.get('findings', 0)} total findings across {len(step_syntheses)} research steps.
 
 Per-step research syntheses:
 {steps_text}
 
 
-Write the comprehensive research report:"""
+
+Write the comprehensive research report. Remember: 3000-8000 words, deeply technical, every claim attributed to sources:"""
 
         try:
             report = self.llm.complete(
                 messages=[{"role": "user", "content": user_prompt}],
                 system_prompt=system_prompt,
-                max_tokens=4000,
+                max_tokens=8000,
                 temperature=0.5,
             )
-            
+
             # Add final synthesis to graph
             step_synth_ids = [
-                sid for sid in 
+                sid for sid in
                 [n.get("id") for n in self.graph.get_synthesis_chain()]
             ]
             self.graph.add_synthesis(
@@ -334,20 +388,14 @@ Write the comprehensive research report:"""
                 finding_ids=step_synth_ids,
                 depth=1,  # Final synthesis is depth 1
             )
-            
-            # Append sources section if not already included
-            if "## Sources" not in report and "## References" not in report:
-                report += f"\n\n---\n\n## Sources\n\n{source_list}"
-            
             return report
-            
+
         except Exception as e:
             logger.error(f"[RLM] Final synthesis failed: {e}")
             # Fallback: concatenate step syntheses
             fallback = f"# Research Report: {research_query}\n\n"
             for s in step_syntheses:
                 fallback += f"## {s.get('title', 'Step')}\n\n{s.get('synthesis', '')}\n\n"
-            fallback += f"\n---\n\n## Sources\n\n{source_list}"
             return fallback
 
     # ═══════════════════════════════════════════════════
@@ -357,7 +405,7 @@ Write the comprehensive research report:"""
     def _chunk_content(self, content: str) -> List[str]:
         """
         Phase 3: Programmatic Decomposition.
-        
+
         Splits content into semantically meaningful chunks.
         Prefers splitting on paragraph boundaries, falls back to sentence/character splits.
         """
@@ -365,10 +413,10 @@ Write the comprehensive research report:"""
             return [content]
 
         chunks = []
-        
+
         # Try splitting on double newlines (paragraphs)
         paragraphs = re.split(r'\n\s*\n', content)
-        
+
         current_chunk = ""
         for para in paragraphs:
             if len(current_chunk) + len(para) + 2 <= self.CHUNK_SIZE:
@@ -376,7 +424,7 @@ Write the comprehensive research report:"""
             else:
                 if current_chunk:
                     chunks.append(current_chunk.strip())
-                
+
                 # If single paragraph is too large, split it further
                 if len(para) > self.CHUNK_SIZE:
                     # Split on sentences
@@ -397,10 +445,10 @@ Write the comprehensive research report:"""
                                 current_chunk = sent + " "
                 else:
                     current_chunk = para + "\n\n"
-        
+
         if current_chunk.strip():
             chunks.append(current_chunk.strip())
-        
+
         return chunks if chunks else [content[:self.CHUNK_SIZE]]
 
     def _format_findings(self, findings: List[dict]) -> str:
@@ -409,8 +457,9 @@ Write the comprehensive research report:"""
         for i, f in enumerate(findings, 1):
             importance = f.get("importance", 0.5)
             source = f.get("source_title") or f.get("source_url", "Unknown")
+            ftype = f.get("extraction_type", "fact")
             parts.append(
-                f"[{i}] (importance: {importance:.1f}, source: {source})\n"
+                f"[{i}] (type: {ftype}, importance: {importance:.1f}, source: {source})\n"
                 f"    {f.get('content', '')}"
             )
         return "\n\n".join(parts)
@@ -419,28 +468,28 @@ Write the comprehensive research report:"""
         """Parse JSON from LLM response."""
         if not response:
             return None
-        
+
         text = response.strip()
-        
+
         # Remove markdown code fences
         if text.startswith("```"):
             lines = text.split("\n")
             lines = [l for l in lines if not l.strip().startswith("```")]
             text = "\n".join(lines)
-        
+
         try:
-            return __import__("json").loads(text)
+            return json.loads(text)
         except Exception:
             pass
-        
+
         # Find JSON structures
         for start_c, end_c in [('{', '}'), ('[', ']')]:
             start = text.find(start_c)
             end = text.rfind(end_c)
             if start != -1 and end > start:
                 try:
-                    return __import__("json").loads(text[start:end + 1])
+                    return json.loads(text[start:end + 1])
                 except Exception:
                     continue
-        
+
         return None

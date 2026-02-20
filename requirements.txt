@@ -87,3 +87,6 @@ ratelimit
 
 # Deep Research
 trafilatura
+readability-lxml
+PyMuPDF
+

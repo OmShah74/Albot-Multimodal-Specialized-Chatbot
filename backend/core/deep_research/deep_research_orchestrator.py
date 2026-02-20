@@ -142,6 +142,9 @@ class DeepResearchOrchestrator:
             plan = await planner.generate_plan(query)
             self._sessions[session_id]["plan"] = plan.model_dump()
             
+            # Pass the query-specific report structure to the RLM engine
+            rlm.report_structure = plan.report_structure
+            
             # Add plan to context graph
             session_node_id = context_graph.add_node(
                 ResearchNodeType.SESSION,
@@ -222,7 +225,7 @@ class DeepResearchOrchestrator:
                     context_graph.add_edge(step_node_id, query_node_id, ResearchEdgeType.EXECUTED_QUERY)
                     
                     try:
-                        search_results, _ = await self.web_search.search(search_query, top_k=5)
+                        search_results, _ = await self.web_search.search(search_query, top_k=8)
                         
                         urls = [r.url for r in search_results if r.url]
                         all_urls.extend(urls)
@@ -255,13 +258,48 @@ class DeepResearchOrchestrator:
                     break
                 
                 # ── 2b. Scrape top URLs ──
-                # Limit per step to spread sources across steps
                 remaining_budget = config.max_sources - total_sources_scraped
-                urls_to_scrape = list(dict.fromkeys(all_urls))[:min(5, remaining_budget)]
+                urls_to_scrape = list(dict.fromkeys(all_urls))[:min(8, remaining_budget)]
                 
                 if not urls_to_scrape:
+                    # ── Retry: generate simpler fallback queries for this step ──
+                    logger.warning(f"[DeepResearch] Step {step_idx} yielded no URLs. Attempting fallback queries.")
+                    
+                    await emit(ResearchProgressEvent(
+                        event_type="search_completed",
+                        step_index=step_idx,
+                        total_steps=len(plan.steps),
+                        sources_scraped=total_sources_scraped,
+                        total_findings=total_findings,
+                        current_activity=f"No results found, trying fallback queries for: {step.title}",
+                    ))
+                    
+                    # Generate simpler fallback queries from the step title/description
+                    fallback_queries = await planner.generate_follow_up_queries(
+                        step_title=step.title,
+                        findings_summary=f"No results found. Original description: {step.description}",
+                        original_query=query,
+                    )
+                    
+                    for fb_query in fallback_queries:
+                        if self.is_cancelled(session_id):
+                            break
+                        try:
+                            search_results, _ = await self.web_search.search(fb_query, top_k=8)
+                            fb_urls = [r.url for r in search_results if r.url]
+                            all_urls.extend(fb_urls)
+                            if fb_urls:
+                                logger.info(f"[DeepResearch] Fallback query '{fb_query}' found {len(fb_urls)} URLs")
+                        except Exception as e:
+                            logger.warning(f"[DeepResearch] Fallback search failed for '{fb_query}': {e}")
+                    
+                    urls_to_scrape = list(dict.fromkeys(all_urls))[:min(8, remaining_budget)]
+                
+                if not urls_to_scrape:
+                    # Genuinely no results for this step even after fallback
                     context_graph.update_node(step_node_id, {"status": "completed", "findings_count": 0})
                     step_syntheses.append({"title": step.title, "synthesis": "No sources could be found for this step."})
+                    logger.warning(f"[DeepResearch] Step {step_idx} skipped — no URLs after fallback.")
                     continue
                 
                 scraped_pages = await scraper.scrape_urls(urls_to_scrape)
@@ -355,11 +393,16 @@ class DeepResearchOrchestrator:
                 ))
             
             # ── Phase 3: FINAL SYNTHESIS ──────────────────
-            return await self._finalize(
+            result = await self._finalize(
                 session_id, query, context_graph, rlm,
                 step_syntheses, start_time,
                 cancelled=self.is_cancelled(session_id),
             )
+            
+            # Cleanup temp files downloaded during scraping (e.g. arXiv PDFs)
+            scraper.cleanup_temp_files()
+            
+            return result
             
         except Exception as e:
             logger.error(f"[DeepResearch] Research failed: {e}")
@@ -395,10 +438,8 @@ class DeepResearchOrchestrator:
         self._sessions[session_id]["status"] = ResearchStatus.SYNTHESIZING
         
         # Emit synthesis starting event
-        progress_cb = None
         if session_id in self._sessions:
             events = self._sessions[session_id]["progress_events"]
-            # We'll add the event directly
             events.append(ResearchProgressEvent(
                 event_type="synthesis_started",
                 sources_scraped=context_graph.get_source_count(),
@@ -407,9 +448,21 @@ class DeepResearchOrchestrator:
                 thinking="Combining all findings into a comprehensive research report with source attribution.",
             ).model_dump())
         
+        # Filter out placeholder-only syntheses to avoid polluting the final report
+        # Only include steps that actually have substantive content
+        meaningful_syntheses = [
+            s for s in step_syntheses
+            if s.get("synthesis") and not s["synthesis"].startswith("No sources could be found")
+            and not s["synthesis"].startswith("Limited findings for")
+        ]
+
+        # If we have some meaningful syntheses, use only those for the final report
+        # Fall back to all syntheses if nothing meaningful was found
+        syntheses_for_report = meaningful_syntheses if meaningful_syntheses else step_syntheses
+
         # Generate final report
-        if step_syntheses:
-            report = await rlm.synthesize_final(query, step_syntheses)
+        if syntheses_for_report:
+            report = await rlm.synthesize_final(query, syntheses_for_report, report_structure=rlm.report_structure)
         else:
             report = f"# Research Report: {query}\n\nInsufficient data was gathered to generate a comprehensive report. Please try again with different search terms."
         
