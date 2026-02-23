@@ -238,6 +238,16 @@ async def add_api_key(request: APIKeyRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@app.post("/api-keys/test/{provider}/{name}")
+async def test_api_key(provider: str, name: str):
+    """Test an existing API key"""
+    try:
+        is_valid = rag_system.test_existing_key(provider, name)
+        return {"status": "success" if is_valid else "failed"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @app.get("/api-keys/list")
 async def list_api_keys():
     """List all API keys"""

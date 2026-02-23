@@ -67,6 +67,29 @@ class LLMRouter:
                 })
         return result
     
+    def test_existing_key(self, provider: LLMProvider, name: str) -> bool:
+        """Test an existing API key instance by name."""
+        if provider not in self.config.instances:
+            raise ValueError(f"Provider {provider.value} not found")
+            
+        for inst in self.config.instances[provider]:
+            if inst.name == name:
+                try:
+                    self._call_provider(
+                        provider=provider,
+                        instance=inst,
+                        messages=[{"role": "user", "content": "Reply with 'OK' if you receive this."}],
+                        system_prompt=None,
+                        max_tokens=10,
+                        temperature=0.0
+                    )
+                    return True
+                except Exception as e:
+                    logger.warning(f"API key test failed for {provider.value} / {name}: {e}")
+                    raise ValueError(f"API key validation failed: {str(e)}")
+                    
+        raise ValueError(f"Key '{name}' not found for provider {provider.value}")
+    
     def complete(
         self,
         messages: List[Dict[str, str]],

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Key, Check, Loader2, Trash2 } from 'lucide-react';
+import { X, Key, Check, Loader2, Trash2, Zap, CheckCircle } from 'lucide-react';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { motion } from 'framer-motion';
@@ -17,6 +17,7 @@ export function ApiKeyModal({ isOpen, onClose }: ApiKeyModalProps) {
   const [modelName, setModelName] = useState('');
   const [status, setStatus] = useState<{msg: string, type: 'success'|'error'} | null>(null);
   const [loading, setLoading] = useState(false);
+  const [testStatuses, setTestStatuses] = useState<Record<string, 'testing' | 'success' | 'error'>>({});
   const [existingKeys, setExistingKeys] = useState<Record<string, Array<{name: string, key: string, model_name?: string}>>>({});
 
   useEffect(() => {
@@ -49,10 +50,33 @@ export function ApiKeyModal({ isOpen, onClose }: ApiKeyModalProps) {
       setKey('');
       setModelName('');
       fetchKeys();
+      fetchKeys();
     } catch (e: any) {
       setStatus({ msg: e.response?.data?.detail || 'Failed to add key', type: 'error' });
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleTest = async (prov: string, keyName: string) => {
+    const keyId = `${prov}-${keyName}`;
+    setTestStatuses(prev => ({ ...prev, [keyId]: 'testing' }));
+    
+    try {
+      const res = await api.testApiKey(prov, keyName);
+      if (res.status === 'success') {
+        setTestStatuses(prev => ({ ...prev, [keyId]: 'success' }));
+      } else {
+        setTestStatuses(prev => ({ ...prev, [keyId]: 'error' }));
+      }
+    } catch (e) {
+      console.error('Failed to test key', e);
+      setTestStatuses(prev => ({ ...prev, [keyId]: 'error' }));
+      showNotification({
+          type: 'error',
+          title: 'Validation Failed',
+          message: `The API key "${keyName}" for ${prov} failed validation. Please check your credentials.`
+      });
     }
   };
 
@@ -174,22 +198,47 @@ export function ApiKeyModal({ isOpen, onClose }: ApiKeyModalProps) {
             <h3 className="text-sm font-medium text-white/70">Stored Keys</h3>
             <div className="grid gap-3">
               {Object.entries(existingKeys).flatMap(([prov, keys]) => 
-                keys.map((k, i) => (
-                  <div key={`${prov}-${i}`} className="flex items-center justify-between p-3 bg-white/5 rounded-xl border border-white/5">
+                keys.map((k, i) => {
+                  const keyId = `${prov}-${k.name}`;
+                  const testStatus = testStatuses[keyId];
+                  return (
+                  <div key={`${prov}-${i}`} className={cn(
+                    "flex items-center justify-between p-3 rounded-xl border transition-colors",
+                    testStatus === 'success' ? "bg-green-500/10 border-green-500/30 shadow-[0_0_10px_rgba(34,197,94,0.1)]" : "bg-white/5 border-white/5"
+                  )}>
                     <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-lg bg-white/5 flex items-center justify-center text-neutral-400">
-                        <Key className="w-4 h-4" />
+                      <div className={cn(
+                        "w-8 h-8 rounded-lg flex items-center justify-center transition-colors",
+                        testStatus === 'success' ? "bg-green-500/20 text-green-400" : "bg-white/5 text-neutral-400"
+                      )}>
+                        {testStatus === 'success' ? <CheckCircle className="w-4 h-4" /> : <Key className="w-4 h-4" />}
                       </div>
                       <div>
-                        <div className="font-medium text-sm text-white">{k.name}</div>
+                        <div className="font-medium text-sm text-white flex items-center gap-2">
+                          {k.name}
+                          {testStatus === 'error' && <span className="text-[10px] bg-red-500/20 text-red-400 px-1.5 py-0.5 rounded font-bold tracking-wider">INVALID</span>}
+                        </div>
                         <div className="text-xs text-neutral-500 uppercase">{prov} • {k.key}</div>
                       </div>
                     </div>
-                    <button onClick={() => handleDelete(prov, k.name)} className="p-2 text-neutral-600 hover:text-red-400 transition-colors">
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+                    <div className="flex items-center gap-1">
+                      <button 
+                        onClick={() => handleTest(prov, k.name)} 
+                        disabled={testStatus === 'testing'}
+                        className={cn(
+                          "p-2 rounded transition-colors flex items-center justify-center",
+                          testStatus === 'testing' ? "text-primary opacity-50 cursor-not-allowed" : "text-neutral-500 hover:text-primary hover:bg-white/5"
+                        )}
+                        title="Test API Key"
+                      >
+                         {testStatus === 'testing' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+                      </button>
+                      <button onClick={() => handleDelete(prov, k.name)} className="p-2 text-neutral-600 hover:text-red-400 hover:bg-red-500/10 rounded transition-colors" title="Delete API Key">
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
-                ))
+                )})
               )}
             </div>
           </div>

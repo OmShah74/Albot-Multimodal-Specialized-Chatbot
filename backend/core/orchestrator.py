@@ -943,14 +943,24 @@ You have access to real-time web search results combined with local knowledge. A
             return None
     
     def add_api_key(self, provider: str, name: str, key: str, model_name: Optional[str] = None):
-        """Add API key to LLM router and save to storage"""
+        """Add an API key to the LLM router and save to storage"""
         from backend.models.config import LLMProvider
-        
-        provider_enum = LLMProvider(provider.lower().strip())
-        self.llm_router.add_api_key(provider_enum, name, key, model_name)
-        
-        # Save to persistent storage
-        self.storage.save_api_key(provider.lower().strip(), name, key, model_name)
+        try:
+            prov_enum = LLMProvider(provider.lower().strip())
+            self.llm_router.add_api_key(prov_enum, name, key, model_name)
+            # Save to persistent storage
+            self.storage.save_api_key(provider.lower().strip(), name, key, model_name)
+        except ValueError:
+            raise ValueError(f"Invalid provider: {provider}")
+
+    def test_existing_key(self, provider: str, name: str) -> bool:
+        """Test an existing API key by name using the LLM router"""
+        from backend.models.config import LLMProvider
+        try:
+            prov_enum = LLMProvider(provider.lower().strip())
+            return self.llm_router.test_existing_key(prov_enum, name)
+        except ValueError:
+            raise ValueError(f"Invalid provider: {provider}")
 
     def delete_api_key(self, provider: str, name: str):
         """Delete API key from router and storage"""
