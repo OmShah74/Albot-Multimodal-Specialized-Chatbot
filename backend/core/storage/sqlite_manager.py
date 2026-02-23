@@ -22,9 +22,16 @@ class SQLiteStorageManager:
         """Ensure the directory for the database exists"""
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
 
+    from contextlib import contextmanager
+    @contextmanager
     def _get_connection(self):
-        """Get a database connection"""
-        return sqlite3.connect(self.db_path)
+        """Get a database connection and ensure it closes after the transaction"""
+        conn = sqlite3.connect(self.db_path, timeout=15, check_same_thread=False)
+        try:
+            with conn: # This manages the transaction (commits on success, rolls back on error)
+                yield conn
+        finally:
+            conn.close()
 
     def _init_db(self):
         """Initialize the database schema with chats, messages, and memory tables"""

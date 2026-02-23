@@ -340,8 +340,39 @@ class RAGOrchestrator:
                 
                 if web_results:
                     web_search_used = True
-                    web_evidence = self.web_search.format_for_llm(web_results)
                     web_sources = [r.url for r in web_results if r.url]
+                    
+                    # --- Deep Scraping for Top 3 Results ---
+                    try:
+                        from backend.core.deep_research.web_scraper import DeepWebScraper
+                        scraper = DeepWebScraper()
+                        logger.info("Live scraping top 3 web results for deeper context...")
+                        
+                        # Scrape top 3 URLs to keep latency reasonable for a synchronous chat
+                        scraped_pages = await scraper.scrape_urls(web_sources[:3])
+                        
+                        web_evidence_parts = []
+                        for page in scraped_pages:
+                            if page.content:
+                                # Truncate length per page to avoid context bloat (4000 chars ~ 1000 tokens)
+                                content = page.content[:4000] + ("..." if len(page.content) > 4000 else "")
+                                web_evidence_parts.append(f"Source: {page.url}\n{content}\n")
+                        
+                        if web_evidence_parts:
+                            web_evidence = "\n".join(web_evidence_parts)
+                            logger.info(f"Successfully scraped {len(web_evidence_parts)} pages.")
+                        else:
+                            # Fallback if scraping yielded no text
+                            web_evidence = self.web_search.format_for_llm(web_results)
+                            
+                        # Cleanup downloaded PDFs from scraper
+                        if hasattr(scraper, 'cleanup_temp_files'):
+                            scraper.cleanup_temp_files()
+                            
+                    except Exception as scrape_err:
+                        logger.warning(f"Live web scraping failed, falling back to snippets: {scrape_err}")
+                        web_evidence = self.web_search.format_for_llm(web_results)
+                    # ----------------------------------------
                     
                     # Merge: local evidence + web evidence
                     if evidence and evidence.strip():
@@ -355,7 +386,7 @@ class RAGOrchestrator:
                     evidence = combined_evidence
                     sources = list(set(sources + web_sources))
                     
-                    logger.info(f"Web search added {len(web_results)} results")
+                    logger.info(f"Web search resolved with combined sources")
                 else:
                     logger.warning("Web search returned 0 results.")
                     

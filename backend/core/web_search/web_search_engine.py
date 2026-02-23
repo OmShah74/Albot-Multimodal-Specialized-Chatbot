@@ -197,15 +197,28 @@ class WebSearchEngine:
     
     # Domains to filter out of fused search results for deep research
     BLOCKED_RESULT_DOMAINS = {
-        "wikipedia.org", "wikimedia.org", "wikibooks.org",
-        "wikiversity.org", "wiktionary.org", "wikiquote.org",
-        "wikisource.org", "simple.wikipedia.org",
-        "wikihow.com", "quora.com", "answers.com", "ehow.com",
-        # Chinese / non-English platforms
-        "zhihu.com", "baidu.com", "weibo.com", "csdn.net",
-        # General news (not research)
-        "ndtv.com", "timesofindia.com", "hindustantimes.com",
-        "indiatoday.in", "thehindu.com", "news18.com", "indianexpress.com",
+        "chanel.com",
+        "amazon.com",
+        "ebay.com",
+        "etsy.com",
+        "walmart.com",
+        "shopify.com",
+        "twitter.com", "x.com", "facebook.com", "instagram.com",
+        "tiktok.com", "linkedin.com", "pinterest.com",
+        "youtube.com", "youtu.be",
+        # Chinese Q&A / non-English platforms (irrelevant for English research)
+        "zhihu.com",
+        "baidu.com",
+        "weibo.com",
+        "csdn.net",
+        "ndtv.com",
+        "timesofindia.com",
+        "hindustantimes.com",
+        "indiatoday.in",
+        "thehindu.com",
+        "news18.com",
+        "indianexpress.com",
+
     }
 
     def _fuse_results(

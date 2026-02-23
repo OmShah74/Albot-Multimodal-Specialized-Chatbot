@@ -56,37 +56,81 @@ class DeepWebScraper:
     Features:
     - Async batch scraping with concurrency control
     - arXiv PDF download + text extraction + auto-cleanup
-    - Blocked domain filtering (Wikipedia, unauthorized sources)
+    - Locale-aware URL deduplication (prevents IBM-in-5-languages problem)
+    - URL relevance pre-filtering (prevents stackoverflow/chanel.com scraping)
+    - Blocked domain filtering (Wikipedia, StackOverflow, retail, etc.)
     - Content length limiting
     - Timeout handling
     - Domain extraction
     """
 
     # ─── Blocked Domains ─────────────────────────────────
-    # These are skipped entirely — social media, wikis, and low-quality sites
-    # ─── Blocked Domains ─────────────────────────────────
-    # These are skipped entirely — social media, wikis, and low-quality sites
+    # These are skipped entirely — social media, wikis, low-quality, and
+    # off-topic sites that cause false positives for research queries
     BLOCKED_DOMAINS = {
         # Social media
         "twitter.com", "x.com", "facebook.com", "instagram.com",
         "tiktok.com", "linkedin.com", "pinterest.com",
         "youtube.com", "youtu.be",
+
         # Wikipedia and wiki sites (unreliable for deep research)
         "wikipedia.org", "en.wikipedia.org", "en.m.wikipedia.org",
         "wikibooks.org", "wikiversity.org", "wikiquote.org",
         "wiktionary.org", "wikisource.org", "wikimedia.org",
         "simple.wikipedia.org",
+
         # Low-quality / SEO-farm / aggregator sites
         "quora.com", "answers.com", "ehow.com",
         "wikihow.com", "about.com",
-        "scribd.com",  # paywall
+        "scribd.com",       # paywall
         "slideshare.net",
-        "reddit.com",  # noisy forum content
+        "reddit.com",       # noisy forum content
+
+        # Programming Q&A — massive false positive source for research terms
+        # "object", "instance", "channel", "detection" are all programming terms
+        "stackoverflow.com",
+        "stackexchange.com",
+        "superuser.com",
+        "serverfault.com",
+        "askubuntu.com",
+        "mathoverflow.net",
+        "crossvalidated.com",
+
+        # Programming language references — false positive for "future", "iterator", etc.
+        "cppreference.com",
+        "cplusplus.com",
+        "docs.python.org",
+        "developer.mozilla.org",
+        "docs.oracle.com",
+        "learn.microsoft.com",
+        "docs.microsoft.com",
+
+        # Generic tech support (not research content)
+        "support.google.com",
+        "support.microsoft.com",
+        "support.apple.com",
+        "help.github.com",
+
+        # E-commerce / retail — false positive for "channel", "detection", etc.
+        "chanel.com",
+        "amazon.com",
+        "ebay.com",
+        "etsy.com",
+        "walmart.com",
+        "shopify.com",
+
         # Chinese Q&A / non-English platforms (irrelevant for English research)
         "zhihu.com",
         "baidu.com",
         "weibo.com",
         "csdn.net",
+
+        # Japanese / other non-English forums
+        "hinative.com",
+        "lang-8.com",
+        "tc-forum.co.jp",
+        "chiphell.com",
+
         # General news sites (not research sources)
         "ndtv.com",
         "timesofindia.com",
@@ -95,6 +139,19 @@ class DeepWebScraper:
         "thehindu.com",
         "news18.com",
         "indianexpress.com",
+
+        # Generic tech forums (low research signal)
+        "tomsguide.com",
+        "tomshardware.com",
+        "forums.macrumors.com",
+        "macrumors.com",
+        "techradar.com",
+        "cnet.com",
+        "zdnet.com",
+        "theverge.com",
+        "engadget.com",
+        "wired.com",
+        "gizmodo.com",
     }
 
     # ─── Prioritized Domains ─────────────────────────────
@@ -108,7 +165,32 @@ class DeepWebScraper:
         "distill.pub", "paperswithcode.com",
         "huggingface.co", "blog.research.google",
         "ai.meta.com", "deepmind.google",
+        "openai.com", "anthropic.com",
+        "proceedings.neurips.cc", "proceedings.mlr.press",
+        "cv-foundation.org", "ecva.net",
     }
+
+    # ─── Research URL Hint Keywords ──────────────────────
+    # Used by _filter_by_url_relevance to prioritize research-relevant URLs
+    RESEARCH_URL_HINTS = [
+        "arxiv", "paper", "research", "journal", "conference",
+        "ieee", "acm", "springer", "nature", "github",
+        "huggingface", "openreview", "proceedings", "preprint",
+        "abstract", "pdf", "publication", "scholar",
+        "vision", "detection", "segmentation", "neural", "deep",
+        "learning", "model", "dataset", "benchmark", "survey",
+        "transformer", "convolution", "attention",
+    ]
+
+    # ─── Locale Pattern for URL Deduplication ────────────
+    # Matches patterns like /en-us/, /ja-jp/, /de-de/, /zh-cn/ etc.
+    LOCALE_PATTERN = re.compile(
+        r'/(en|ja|de|fr|pt|ko|zh|es|it|nl|ru|ar|tr|pl|sv|da|fi|nb|cs|hu|ro|uk)'
+        r'[-_]'
+        r'(us|gb|jp|de|fr|br|kr|cn|es|it|nl|ru|ar|tr|pl|se|dk|fi|no|cz|hu|ro|ua|in|au|ca|mx)'
+        r'(?=/|$)',
+        re.IGNORECASE
+    )
 
     # Common headers to mimic a browser
     DEFAULT_HEADERS = {
@@ -128,7 +210,14 @@ class DeepWebScraper:
     async def scrape_urls(self, urls: List[str]) -> List[ScrapedPage]:
         """
         Scrape multiple URLs in parallel with concurrency control.
-        Automatically prioritizes research-quality domains.
+
+        Pipeline:
+        1. Normalize and deduplicate URLs by exact URL
+        2. Filter blocked domains
+        3. Deduplicate by locale-normalized path (prevents multi-language duplicates)
+        4. Pre-filter by URL relevance (prioritizes research-relevant URLs)
+        5. Sort by priority domain score
+        6. Scrape in parallel with semaphore
 
         Args:
             urls: List of URLs to scrape
@@ -136,7 +225,7 @@ class DeepWebScraper:
         Returns:
             List of ScrapedPage results (one per URL)
         """
-        # Deduplicate and filter blocked domains
+        # Step 1: Normalize and exact-deduplicate
         seen = set()
         unique_urls = []
         for url in urls:
@@ -144,7 +233,7 @@ class DeepWebScraper:
             if normalized and normalized not in seen:
                 seen.add(normalized)
                 domain = urlparse(normalized).netloc.replace("www.", "")
-                # Check if domain is blocked
+                # Step 2: Check if domain is blocked
                 if self._is_blocked(domain):
                     logger.info(f"[WebScraper] Blocked domain skipped: {domain}")
                     continue
@@ -153,7 +242,15 @@ class DeepWebScraper:
         if not unique_urls:
             return []
 
-        # Sort: priority domains first
+        # Step 3: Deduplicate by locale-normalized path
+        # Prevents scraping IBM XAI page in English, Japanese, German, etc.
+        unique_urls = self._deduplicate_by_content_path(unique_urls)
+
+        # Step 4: Pre-filter by URL relevance
+        # Moves clearly irrelevant URLs (stackoverflow, chanel.com) to end of list
+        unique_urls = self._filter_by_url_relevance(unique_urls)
+
+        # Step 5: Sort — priority domains first, then relevance-ordered
         unique_urls.sort(key=lambda u: self._priority_score(u), reverse=True)
 
         logger.info(f"[WebScraper] Scraping {len(unique_urls)} URLs (max concurrent: {self.max_concurrent})")
@@ -195,6 +292,99 @@ class DeepWebScraper:
             except Exception as e:
                 logger.warning(f"[WebScraper] Failed to clean temp file {fpath}: {e}")
         self._temp_files.clear()
+
+    # ═══════════════════════════════════════════════════
+    # URL Pre-Processing Methods
+    # ═══════════════════════════════════════════════════
+
+    def _deduplicate_by_content_path(self, urls: List[str]) -> List[str]:
+        """
+        Remove URLs that are likely translations/localizations of the same page.
+
+        Detects patterns like:
+            ibm.com/en-us/topics/xai   <- keep (English preferred)
+            ibm.com/ja-jp/topics/xai   <- remove (same content, Japanese)
+            ibm.com/de-de/topics/xai   <- remove (same content, German)
+
+        Strategy: strip locale segments and deduplicate on (domain, canonical_path).
+        When multiple locale variants exist, the English version is preferred.
+        """
+        seen_canonical = {}  # canonical_key -> url
+        result = []
+
+        for url in urls:
+            try:
+                parsed = urlparse(url)
+                # Strip locale segment from path to get canonical path
+                canonical_path = self.LOCALE_PATTERN.sub('', parsed.path)
+                # Also normalize trailing slashes and query params
+                canonical_path = canonical_path.rstrip('/')
+                canonical_key = f"{parsed.netloc.lower()}{canonical_path.lower()}"
+
+                if canonical_key not in seen_canonical:
+                    seen_canonical[canonical_key] = url
+                    result.append(url)
+                else:
+                    # If we already have this page but current URL is English, prefer it
+                    existing_url = seen_canonical[canonical_key]
+                    url_lower = url.lower()
+                    existing_lower = existing_url.lower()
+                    is_english = ('/en-us/' in url_lower or '/en-gb/' in url_lower
+                                  or '/en/' in url_lower or '/english/' in url_lower)
+                    existing_is_english = ('/en-us/' in existing_lower or '/en-gb/' in existing_lower
+                                           or '/en/' in existing_lower or '/english/' in existing_lower)
+                    if is_english and not existing_is_english:
+                        # Replace with English version
+                        seen_canonical[canonical_key] = url
+                        result = [u if u != existing_url else url for u in result]
+                        logger.debug(f"[WebScraper] Preferred English locale: {url} over {existing_url}")
+                    else:
+                        logger.debug(f"[WebScraper] Locale duplicate skipped: {url} (canonical: {canonical_key})")
+
+            except Exception:
+                # If parsing fails, include the URL to be safe
+                result.append(url)
+
+        original_count = len(urls)
+        deduped_count = len(result)
+        if original_count != deduped_count:
+            logger.info(f"[WebScraper] Locale dedup: {original_count} -> {deduped_count} URLs")
+
+        return result
+
+    def _filter_by_url_relevance(self, urls: List[str]) -> List[str]:
+        """
+        Reorder URLs so research-relevant ones come first.
+
+        Checks if any research hint keyword appears in the URL's domain or path.
+        URLs without any hint are moved to the end of the list (not removed,
+        since they might still contain relevant content).
+
+        This prevents wasting the per-step scrape budget on clearly off-topic
+        pages like stackoverflow.com/questions/what-is-object or chanel.com.
+        """
+        high_confidence = []
+        low_confidence = []
+
+        for url in urls:
+            url_lower = url.lower()
+            if any(hint in url_lower for hint in self.RESEARCH_URL_HINTS):
+                high_confidence.append(url)
+            else:
+                low_confidence.append(url)
+                logger.debug(f"[WebScraper] Low-confidence URL deprioritized: {url}")
+
+        if low_confidence:
+            logger.info(
+                f"[WebScraper] URL relevance filter: {len(high_confidence)} high-confidence, "
+                f"{len(low_confidence)} low-confidence (moved to end)"
+            )
+
+        return high_confidence + low_confidence
+
+    # ═══════════════════════════════════════════════════
+    # Core Scraping
+    # ═══════════════════════════════════════════════════
 
     async def _scrape_single(self, url: str) -> ScrapedPage:
         """Scrape a single URL with multi-tier content extraction."""
@@ -418,7 +608,11 @@ class DeepWebScraper:
                     tag.decompose()
 
                 # Try article/main content first
-                main_content = soup.find("article") or soup.find("main") or soup.find("div", class_=re.compile(r"content|article|post"))
+                main_content = (
+                    soup.find("article")
+                    or soup.find("main")
+                    or soup.find("div", class_=re.compile(r"content|article|post"))
+                )
 
                 if main_content:
                     content = main_content.get_text(separator="\n", strip=True)
@@ -478,6 +672,10 @@ class DeepWebScraper:
         for pd in self.PRIORITY_DOMAINS:
             if pd in domain:
                 return 10
+        # Give a small boost to URLs that contain research hint keywords
+        url_lower = url.lower()
+        if any(hint in url_lower for hint in self.RESEARCH_URL_HINTS):
+            return 5
         return 0
 
     def _normalize_url(self, url: str) -> Optional[str]:
