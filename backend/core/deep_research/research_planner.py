@@ -38,7 +38,7 @@ class ResearchPlanner:
         max_steps = self.config.max_steps
 
         system_prompt = f"""You are a world-class research planning expert. Given a research query, you must create:
-1. A comprehensive, deeply technical research plan with 8-12 steps.
+1. A comprehensive, deeply technical research plan with 10 to 13 steps (MINIMUM 10 steps).
 2. A CUSTOM REPORT STRUCTURE tailored specifically to the query (NOT a generic format).
 
 CRITICAL RULES FOR SEARCH QUERIES:
@@ -107,7 +107,7 @@ Requirements:
             response = self.llm.complete(
                 messages=[{"role": "user", "content": user_prompt}],
                 system_prompt=system_prompt,
-                max_tokens=3000,
+                max_tokens=4500,
                 temperature=0.4,
             )
 
@@ -296,6 +296,10 @@ Is the research sufficient for a 3000+ word expert report? (yes/no)"""
 
     def _fallback_plan(self, query: str) -> ResearchPlan:
         """Generate a comprehensive fallback plan if LLM plan generation fails."""
+        # Shorten query for better search results if it's too long
+        words = query.split()
+        short_query = " ".join(words[:5]) if len(words) > 5 else query
+        
         return ResearchPlan(
             steps=[
                 ResearchStepDef(
@@ -303,10 +307,10 @@ Is the research sufficient for a 3000+ word expert report? (yes/no)"""
                     title="Core Definitions and Formal Foundations",
                     description=f"Research formal definitions, theoretical foundations, and seminal works for: {query}",
                     search_queries=[
-                        f"{query} survey arxiv 2024",
-                        f"{query} formal definition research paper",
-                        f"{query} seminal work foundational",
-                        f"{query} overview technical explanation",
+                        f"{short_query} survey arxiv",
+                        f"{short_query} formal definition research paper",
+                        f"{short_query} seminal work foundational",
+                        f"{short_query} overview technical explanation",
                     ],
                 ),
                 ResearchStepDef(
@@ -314,52 +318,94 @@ Is the research sufficient for a 3000+ word expert report? (yes/no)"""
                     title="Architecture and Technical Design",
                     description=f"Investigate architectures, algorithms, and design patterns for: {query}",
                     search_queries=[
-                        f"{query} architecture design paper",
-                        f"{query} algorithm technical details arxiv",
-                        f"{query} implementation neural network",
-                        f"{query} model design deep learning",
+                        f"{short_query} architecture design paper",
+                        f"{short_query} algorithm technical details arxiv",
+                        f"{short_query} implementation tutorial",
                     ],
                 ),
                 ResearchStepDef(
                     step_index=2,
-                    title="Empirical Results and Benchmarks",
-                    description=f"Find benchmark comparisons, evaluation results, and performance metrics for: {query}",
+                    title="Key Components and Mechanisms",
+                    description=f"Deep dive into the specific mechanisms that power: {query}",
                     search_queries=[
-                        f"{query} benchmark evaluation results 2024",
-                        f"{query} SOTA state of the art performance",
-                        f"{query} ablation study arxiv paper",
-                        f"{query} COCO ImageNet benchmark comparison",
+                        f"{short_query} components mechanisms paper",
+                        f"{short_query} internals deep dive",
                     ],
                 ),
                 ResearchStepDef(
                     step_index=3,
-                    title="Current Research Frontiers",
-                    description=f"Latest developments, open problems, and active research for: {query}",
+                    title="Implementations and Frameworks",
+                    description=f"Explore frameworks, libraries, and tools related to: {query}",
                     search_queries=[
-                        f"{query} latest advances 2024 2025 arxiv",
-                        f"{query} recent developments research",
-                        f"{query} open problems challenges survey",
-                        f"{query} future directions new paper",
+                        f"{short_query} frameworks libraries tutorial",
+                        f"{short_query} open source implementation GitHub",
                     ],
                 ),
                 ResearchStepDef(
                     step_index=4,
+                    title="Empirical Results and Benchmarks",
+                    description=f"Find benchmark comparisons, evaluation results, and performance metrics for: {query}",
+                    search_queries=[
+                        f"{short_query} benchmark evaluation results",
+                        f"{short_query} SOTA state of the art performance",
+                        f"{short_query} ablation study arxiv paper",
+                    ],
+                ),
+                ResearchStepDef(
+                    step_index=5,
+                    title="Current Research Frontiers",
+                    description=f"Latest developments, open problems, and active research for: {query}",
+                    search_queries=[
+                        f"{short_query} latest advances arxiv",
+                        f"{short_query} open problems challenges survey",
+                    ],
+                ),
+                ResearchStepDef(
+                    step_index=6,
+                    title="Constraints and Limitations",
+                    description=f"Analyze limitations, drawbacks, and failure modes of: {query}",
+                    search_queries=[
+                        f"{short_query} limitations drawbacks paper",
+                        f"{short_query} failure modes analysis",
+                    ],
+                ),
+                ResearchStepDef(
+                    step_index=7,
                     title="Applications and Case Studies",
                     description=f"Real-world applications, industry use cases, and practical implementations of: {query}",
                     search_queries=[
-                        f"{query} real world applications deployment",
-                        f"{query} industry use case practical",
-                        f"{query} production system tutorial",
-                        f"{query} case study results benchmark",
+                        f"{short_query} real world applications deployment",
+                        f"{short_query} industry use case practical",
+                        f"{short_query} production system tutorial",
+                    ],
+                ),
+                ResearchStepDef(
+                    step_index=8,
+                    title="Integration and Best Practices",
+                    description=f"Learn how to integrate and build with: {query}",
+                    search_queries=[
+                        f"{short_query} best practices guide",
+                        f"{short_query} integration tutorial engineering",
+                    ],
+                ),
+                ResearchStepDef(
+                    step_index=9,
+                    title="Future Outlook",
+                    description=f"Future directions and predicted advancements for: {query}",
+                    search_queries=[
+                        f"{short_query} future directions new paper",
+                        f"{short_query} predictive models outlook",
                     ],
                 ),
             ],
             strategy="depth-first",
-            estimated_sources=20,
+            estimated_sources=40,
             report_structure=[
                 {"section_title": f"Foundations of {query}", "section_purpose": "Core definitions and theoretical underpinnings", "expected_content": "Definitions, formalisms, history"},
                 {"section_title": "Technical Architecture", "section_purpose": "How the system/concept works at a technical level", "expected_content": "Algorithms, designs, mathematical formulations"},
+                {"section_title": "Components & Implementations", "section_purpose": "Details on building and using", "expected_content": "Code frameworks, mechanics"},
                 {"section_title": "Empirical Landscape", "section_purpose": "Benchmark results and evaluations", "expected_content": "Tables, metrics, comparisons"},
+                {"section_title": "Applications & Limitations", "section_purpose": "Uses and weaknesses", "expected_content": "Case studies, failure modes"},
                 {"section_title": "Frontiers and Open Problems", "section_purpose": "Where the field is heading", "expected_content": "Active research, unsolved challenges"},
             ],
         )
@@ -372,10 +418,15 @@ Is the research sufficient for a 3000+ word expert report? (yes/no)"""
         text = response.strip()
 
         # Remove markdown code fences if present
-        if text.startswith("```"):
-            lines = text.split("\n")
-            lines = [l for l in lines if not l.strip().startswith("```")]
-            text = "\n".join(lines)
+        if text.startswith("```json"):
+            text = text[7:]
+        elif text.startswith("```"):
+            text = text[3:]
+            
+        if text.endswith("```"):
+            text = text[:-3]
+            
+        text = text.strip()
 
         # Try direct parse
         try:

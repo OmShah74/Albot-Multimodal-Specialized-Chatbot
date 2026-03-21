@@ -55,7 +55,7 @@ class ResearchEdgeType(str, Enum):
 class ResearchConfig(BaseModel):
     """User-configurable research parameters"""
     max_sources: int = Field(default=40, ge=5, le=80, description="Maximum web sources to scrape")
-    max_steps: int = Field(default=12, ge=2, le=15, description="Maximum research plan steps")
+    max_steps: int = Field(default=15, ge=2, le=20, description="Maximum research plan steps")
     depth_limit: int = Field(default=3, ge=1, le=5, description="RLM recursion depth limit")
     max_content_per_page: int = Field(default=20000, ge=5000, le=50000, description="Max chars to extract per page")
     scrape_timeout: float = Field(default=20.0, ge=5.0, le=60.0, description="Timeout per page scrape (seconds)")
