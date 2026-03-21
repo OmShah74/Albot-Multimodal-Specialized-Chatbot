@@ -1,8 +1,8 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Send, Paperclip, Bot, User, Trash2, StopCircle, Zap, Settings2, Clock, ChevronDown, ChevronUp, Activity, X, Globe, FileText, BookOpen, Brain, MessageSquare, Database, Search, Mic, MicOff, Microscope } from 'lucide-react';
+import { Send, Paperclip, Bot, User, Trash2, StopCircle, Zap, Settings2, Clock, ChevronDown, ChevronUp, Activity, X, Globe, FileText, BookOpen, Brain, MessageSquare, Database, Search, Mic, MicOff, Microscope, Scale, Star, AlertTriangle, Lightbulb, CheckCircle2, Loader2 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import axios from 'axios';
-import { api, Message, RetrievalConfig, QueryMetrics } from '@/lib/api';
+import { api, Message, RetrievalConfig, QueryMetrics, JudgeEvaluation } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNotification } from '@/context/NotificationContext';
@@ -95,6 +95,13 @@ export function ChatInterface({ chatId, onChatUpdated, onCreateSession }: ChatIn
   const [memoryDump, setMemoryDump] = useState<any>(null);
   const [memoryLoading, setMemoryLoading] = useState(false);
   const [memoryTab, setMemoryTab] = useState<'conversation' | 'fragments' | 'web' | 'traces'>('conversation');
+
+  // LLM Judge state
+  const [showJudgeViewer, setShowJudgeViewer] = useState(false);
+  const [judgeEvaluations, setJudgeEvaluations] = useState<JudgeEvaluation[]>([]);
+  const [judgeLoading, setJudgeLoading] = useState(false);
+  const [evaluatingIndex, setEvaluatingIndex] = useState<number | null>(null);
+  const [selectedEvaluation, setSelectedEvaluation] = useState<JudgeEvaluation | null>(null);
 
   // Search mode: web_search (with fallback), knowledge_base (local only), or deep_research
   const [searchMode, setSearchMode] = useState<'web_search' | 'knowledge_base' | 'deep_research'>('knowledge_base');
@@ -482,6 +489,30 @@ export function ChatInterface({ chatId, onChatUpdated, onCreateSession }: ChatIn
             <Activity className="w-3.5 h-3.5" />
           </button>
         )}
+        {chatId && history.some(m => m.role === 'assistant') && (
+          <button 
+            type="button" 
+            onClick={async () => {
+              setShowJudgeViewer(true);
+              setJudgeLoading(true);
+              try {
+                const res = await api.getEvaluations(chatId);
+                setJudgeEvaluations(res.evaluations || []);
+                if (res.evaluations?.length > 0) {
+                  setSelectedEvaluation(res.evaluations[res.evaluations.length - 1]);
+                }
+              } catch (err) {
+                console.error('Failed to load judge evaluations:', err);
+              } finally {
+                setJudgeLoading(false);
+              }
+            }}
+            className="px-3 py-1.5 bg-white/5 hover:bg-amber-500/10 text-neutral-400 hover:text-amber-400 rounded-lg transition-all border border-white/5 text-[10px] uppercase tracking-widest font-bold flex items-center gap-2 group/btn backdrop-blur-md"
+          >
+            <Scale className="w-3.5 h-3.5" />
+            Judge
+          </button>
+        )}
         {chatId && (
           <button 
             type="button" 
@@ -655,7 +686,7 @@ export function ChatInterface({ chatId, onChatUpdated, onCreateSession }: ChatIn
                       </div>
                     )}
                     {msg.metrics && (
-                      <div className="pt-2 flex justify-end">
+                      <div className="pt-2 flex justify-end gap-2">
                         <button 
                           onClick={() => {
                             setLastMetrics(msg.metrics || null);
@@ -666,6 +697,51 @@ export function ChatInterface({ chatId, onChatUpdated, onCreateSession }: ChatIn
                           <Zap className="w-2.5 h-2.5" />
                           Technical Report
                         </button>
+                        {chatId && (
+                          <button
+                            disabled={evaluatingIndex === idx}
+                            onClick={async () => {
+                              // Find the preceding user message
+                              const userMsgs = history.slice(0, idx).filter(m => m.role === 'user');
+                              const lastUserMsg = userMsgs[userMsgs.length - 1];
+                              if (!lastUserMsg || !chatId) return;
+                              setEvaluatingIndex(idx);
+                              try {
+                                const res = await api.evaluateResponse(
+                                  chatId,
+                                  idx,
+                                  lastUserMsg.content,
+                                  msg.content,
+                                  msg.sources
+                                );
+                                showNotification({
+                                  type: 'success',
+                                  title: 'Evaluated',
+                                  message: `Verdict: ${res.evaluation.verdict} (${res.evaluation.overall_score}/10)`
+                                });
+                                // Update local evaluations cache
+                                setJudgeEvaluations(prev => [...prev, { ...res.evaluation, id: res.id, message_index: idx }]);
+                              } catch (err) {
+                                console.error('Judge evaluation failed:', err);
+                                showNotification({
+                                  type: 'error',
+                                  title: 'Evaluation Failed',
+                                  message: 'Could not evaluate this response.'
+                                });
+                              } finally {
+                                setEvaluatingIndex(null);
+                              }
+                            }}
+                            className="text-[9px] uppercase tracking-widest font-bold text-amber-400 hover:bg-amber-500/10 transition-colors flex items-center gap-1 bg-amber-500/5 px-2 py-1 rounded-lg border border-amber-500/10 disabled:opacity-50"
+                          >
+                            {evaluatingIndex === idx ? (
+                              <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                            ) : (
+                              <Scale className="w-2.5 h-2.5" />
+                            )}
+                            {evaluatingIndex === idx ? 'Judging...' : 'Evaluate'}
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>
@@ -1388,6 +1464,259 @@ export function ChatInterface({ chatId, onChatUpdated, onCreateSession }: ChatIn
               <div className="p-6 bg-white/5 border-t border-white/5 text-center">
                 <p className="text-[10px] text-neutral-500 uppercase tracking-[0.3em] font-black">
                   Memory Architecture System v1.0
+                </p>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* LLM Judge Viewer Overlay */}
+      <AnimatePresence>
+        {showJudgeViewer && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 md:p-8 backdrop-blur-xl bg-black/40"
+          >
+            <motion.div 
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="w-full max-w-5xl bg-[#0a0a0a] border border-white/10 rounded-3xl overflow-hidden shadow-[0_0_100px_rgba(245,158,11,0.1)] flex flex-col max-h-[90vh]"
+            >
+              {/* Header */}
+              <div className="p-6 border-b border-white/5 flex justify-between items-center bg-white/5">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-amber-500/20 flex items-center justify-center border border-amber-500/30">
+                    <Scale className="w-5 h-5 text-amber-400" />
+                  </div>
+                  <div>
+                    <h2 className="text-lg font-bold text-white tracking-tight uppercase">LLM Judge</h2>
+                    <p className="text-[10px] text-neutral-500 uppercase tracking-widest font-bold">
+                      {judgeEvaluations.length} evaluation{judgeEvaluations.length !== 1 ? 's' : ''} recorded
+                    </p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setShowJudgeViewer(false)}
+                  className="p-2 hover:bg-white/5 rounded-xl transition-colors text-neutral-400"
+                >
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+
+              {/* Content */}
+              <div className="flex-1 overflow-y-auto p-6 space-y-6">
+                {judgeLoading ? (
+                  <div className="flex flex-col items-center justify-center h-48 text-neutral-500 gap-4">
+                    <Scale className="w-12 h-12 opacity-20 animate-pulse" />
+                    <p className="text-sm font-bold uppercase tracking-widest">Loading evaluations...</p>
+                  </div>
+                ) : judgeEvaluations.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center h-48 text-neutral-500 gap-4">
+                    <Scale className="w-12 h-12 opacity-20" />
+                    <p className="text-sm font-bold uppercase tracking-widest">No evaluations yet</p>
+                    <p className="text-xs text-neutral-600 max-w-md text-center">Click the "Evaluate" button on any assistant response to get an LLM-powered quality assessment.</p>
+                  </div>
+                ) : (
+                  <>
+                    {/* Selected Evaluation Detail */}
+                    {selectedEvaluation && (
+                      <section className="space-y-4">
+                        <div className="flex items-center gap-2 px-1">
+                          <Star className="w-4 h-4 text-amber-400" />
+                          <h3 className="text-xs font-black uppercase tracking-[0.2em] text-neutral-400">Evaluation Detail</h3>
+                        </div>
+
+                        {/* Verdict Badge */}
+                        <div className="flex items-center gap-4">
+                          <div className={cn(
+                            "px-4 py-2 rounded-xl text-sm font-black uppercase tracking-widest border",
+                            selectedEvaluation.verdict === 'excellent' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' :
+                            selectedEvaluation.verdict === 'good' ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' :
+                            selectedEvaluation.verdict === 'fair' ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' :
+                            'bg-red-500/10 text-red-400 border-red-500/20'
+                          )}>
+                            {selectedEvaluation.verdict}
+                          </div>
+                          <div className="flex flex-col">
+                            <span className="text-2xl font-black tracking-tighter text-white">
+                              {selectedEvaluation.overall_score}<span className="text-sm ml-0.5 opacity-50">/10</span>
+                            </span>
+                            <span className="text-[9px] uppercase tracking-widest text-neutral-500 font-black">Overall Score</span>
+                          </div>
+                          <div className="ml-auto text-[9px] text-neutral-600">
+                            {selectedEvaluation.evaluation_time_ms?.toFixed(0)}ms evaluation time
+                          </div>
+                        </div>
+
+                        {/* Dimension Scores */}
+                        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                          {[
+                            { key: 'relevance', label: 'Relevance', color: 'text-blue-400 bg-blue-500/10 border-blue-500/20' },
+                            { key: 'accuracy', label: 'Accuracy', color: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20' },
+                            { key: 'completeness', label: 'Completeness', color: 'text-purple-400 bg-purple-500/10 border-purple-500/20' },
+                            { key: 'clarity', label: 'Clarity', color: 'text-cyan-400 bg-cyan-500/10 border-cyan-500/20' },
+                            { key: 'depth', label: 'Depth', color: 'text-indigo-400 bg-indigo-500/10 border-indigo-500/20' },
+                            { key: 'conciseness', label: 'Conciseness', color: 'text-pink-400 bg-pink-500/10 border-pink-500/20' },
+                            { key: 'helpfulness', label: 'Helpfulness', color: 'text-amber-400 bg-amber-500/10 border-amber-500/20' },
+                            { key: 'factual_grounding', label: 'Factual Ground.', color: 'text-teal-400 bg-teal-500/10 border-teal-500/20' },
+                            { key: 'coherence', label: 'Coherence', color: 'text-violet-400 bg-violet-500/10 border-violet-500/20' },
+                            { key: 'engagement', label: 'Engagement', color: 'text-rose-400 bg-rose-500/10 border-rose-500/20' },
+                            { key: 'safety', label: 'Safety', color: 'text-lime-400 bg-lime-500/10 border-lime-500/20' },
+                          ].map(dim => {
+                            const score = (selectedEvaluation as any)[dim.key] as number;
+                            return (
+                              <div key={dim.key} className={cn("p-3 rounded-xl border flex flex-col gap-1", dim.color)}>
+                                <span className="text-[9px] uppercase tracking-widest font-black opacity-80">{dim.label}</span>
+                                <div className="flex items-end gap-2">
+                                  <span className="text-xl font-black tracking-tight text-white">{score ?? '—'}</span>
+                                  <div className="flex-1 h-1.5 bg-white/10 rounded-full overflow-hidden">
+                                    <div 
+                                      className={cn("h-full rounded-full transition-all duration-500", 
+                                        (score ?? 0) >= 8 ? 'bg-emerald-400' : (score ?? 0) >= 6 ? 'bg-blue-400' : (score ?? 0) >= 4 ? 'bg-amber-400' : 'bg-red-400'
+                                      )} 
+                                      style={{ width: `${((score ?? 0) / 10) * 100}%` }} 
+                                    />
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+
+                        {/* Reasoning */}
+                        {selectedEvaluation.reasoning && (
+                          <div className="p-4 rounded-2xl bg-white/5 border border-white/5">
+                            <span className="text-[9px] uppercase tracking-widest font-black text-neutral-500 block mb-1">Judge Reasoning</span>
+                            <p className="text-sm text-neutral-300 leading-relaxed italic">{selectedEvaluation.reasoning}</p>
+                          </div>
+                        )}
+
+                        {/* Strengths / Weaknesses / Suggestions */}
+                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                          {selectedEvaluation.strengths?.length > 0 && (
+                            <div className="p-4 rounded-2xl bg-emerald-500/5 border border-emerald-500/10 space-y-2">
+                              <div className="flex items-center gap-2">
+                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                                <span className="text-[9px] uppercase tracking-widest font-black text-emerald-400">Strengths</span>
+                              </div>
+                              <ul className="space-y-1">
+                                {selectedEvaluation.strengths.map((s, i) => (
+                                  <li key={i} className="text-xs text-neutral-300 leading-relaxed">• {s}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+                          {selectedEvaluation.weaknesses?.length > 0 && (
+                            <div className="p-4 rounded-2xl bg-red-500/5 border border-red-500/10 space-y-2">
+                              <div className="flex items-center gap-2">
+                                <AlertTriangle className="w-3.5 h-3.5 text-red-400" />
+                                <span className="text-[9px] uppercase tracking-widest font-black text-red-400">Weaknesses</span>
+                              </div>
+                              <ul className="space-y-1">
+                                {selectedEvaluation.weaknesses.map((w, i) => (
+                                  <li key={i} className="text-xs text-neutral-300 leading-relaxed">• {w}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+                          {selectedEvaluation.suggestions?.length > 0 && (
+                            <div className="p-4 rounded-2xl bg-amber-500/5 border border-amber-500/10 space-y-2">
+                              <div className="flex items-center gap-2">
+                                <Lightbulb className="w-3.5 h-3.5 text-amber-400" />
+                                <span className="text-[9px] uppercase tracking-widest font-black text-amber-400">Suggestions</span>
+                              </div>
+                              <ul className="space-y-1">
+                                {selectedEvaluation.suggestions.map((s, i) => (
+                                  <li key={i} className="text-xs text-neutral-300 leading-relaxed">• {s}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+                        </div>
+                      </section>
+                    )}
+
+                    {/* Evaluation History */}
+                    {judgeEvaluations.length > 0 && (
+                      <section className="space-y-4">
+                        <div className="flex items-center gap-2 px-1">
+                          <Clock className="w-4 h-4 text-neutral-500" />
+                          <h3 className="text-xs font-black uppercase tracking-[0.2em] text-neutral-400">Evaluation History</h3>
+                        </div>
+                        <div className="space-y-2">
+                          {judgeEvaluations.map((ev, i) => (
+                            <div 
+                              key={ev.id || i}
+                              className={cn(
+                                "flex items-center justify-between p-4 rounded-2xl border transition-all cursor-pointer group relative",
+                                ev === selectedEvaluation
+                                  ? "bg-amber-500/10 border-amber-500/30"
+                                  : "bg-white/5 border-white/5 hover:border-white/10"
+                              )}
+                              onClick={() => setSelectedEvaluation(ev)}
+                            >
+                              {/* Delete button */}
+                              <button
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  if (!ev.id) return;
+                                  try {
+                                    await api.deleteEvaluation(ev.id);
+                                    setJudgeEvaluations(prev => prev.filter(e => e.id !== ev.id));
+                                    if (selectedEvaluation?.id === ev.id) {
+                                      setSelectedEvaluation(judgeEvaluations.length > 1 ? judgeEvaluations.find(e => e.id !== ev.id) || null : null);
+                                    }
+                                    showNotification({ type: 'success', title: 'Deleted', message: 'Evaluation removed.' });
+                                  } catch (err) {
+                                    console.error('Failed to delete evaluation:', err);
+                                    showNotification({ type: 'error', title: 'Error', message: 'Could not delete evaluation.' });
+                                  }
+                                }}
+                                className="absolute top-2 right-2 p-1.5 rounded-lg bg-black/20 text-neutral-500 hover:text-red-400 hover:bg-red-500/10 opacity-0 group-hover:opacity-100 transition-all"
+                                title="Delete evaluation"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                              <div className="flex items-center gap-4">
+                                <span className={cn(
+                                  "w-8 h-8 rounded-lg flex items-center justify-center text-[10px] font-black border",
+                                  ev.verdict === 'excellent' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' :
+                                  ev.verdict === 'good' ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' :
+                                  ev.verdict === 'fair' ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' :
+                                  'bg-red-500/10 text-red-400 border-red-500/20'
+                                )}>
+                                  {ev.overall_score}
+                                </span>
+                                <div className="flex flex-col">
+                                  <span className="text-sm font-bold text-neutral-200">
+                                    {ev.verdict?.toUpperCase()} — {ev.overall_score}/10
+                                  </span>
+                                  <span className="text-[9px] uppercase tracking-widest text-neutral-500 font-bold">
+                                    {ev.user_query ? ev.user_query.slice(0, 80) + (ev.user_query.length > 80 ? '...' : '') : `Response #${(ev.message_index ?? i) + 1}`}
+                                  </span>
+                                </div>
+                              </div>
+                              <div className="flex gap-2 items-center pr-6">
+                                <span className="text-[9px] text-neutral-600">{ev.evaluation_time_ms?.toFixed(0)}ms</span>
+                                <Scale className={cn("w-4 h-4 transition-colors", ev === selectedEvaluation ? 'text-amber-400' : 'text-neutral-700')} />
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </section>
+                    )}
+                  </>
+                )}
+              </div>
+
+              {/* Footer */}
+              <div className="p-6 bg-white/5 border-t border-white/5 text-center">
+                <p className="text-[10px] text-neutral-500 uppercase tracking-[0.3em] font-black">
+                  LLM-as-a-Judge Quality Assessment System v2.0 · 11 Dimensions
                 </p>
               </div>
             </motion.div>

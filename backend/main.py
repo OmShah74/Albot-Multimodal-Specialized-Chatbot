@@ -515,6 +515,90 @@ async def get_namespaces(session_id: Optional[str] = None):
 
 
 # ═══════════════════════════════════════════════════
+# LLM-as-a-Judge Endpoints
+# ═══════════════════════════════════════════════════
+
+from backend.core.llm_judge.llm_judge import LLMJudge
+
+_llm_judge: Optional[LLMJudge] = None
+
+def _get_llm_judge() -> LLMJudge:
+    """Get or create the LLM Judge from the RAG system's LLM router."""
+    global _llm_judge
+    if _llm_judge is None:
+        if not rag_system:
+            raise HTTPException(status_code=503, detail="System not initialized")
+        _llm_judge = LLMJudge(llm_router=rag_system.llm_router)
+    return _llm_judge
+
+
+class JudgeRequest(BaseModel):
+    chat_id: str
+    message_index: int
+    user_query: str
+    assistant_response: str
+    sources: Optional[List[str]] = None
+
+
+@app.post("/judge/evaluate")
+async def evaluate_response(request: JudgeRequest):
+    """Evaluate a chatbot response using LLM-as-a-Judge."""
+    try:
+        judge = _get_llm_judge()
+        evaluation = judge.evaluate(
+            user_query=request.user_query,
+            assistant_response=request.assistant_response,
+            context_sources=request.sources,
+        )
+
+        # Persist to DB
+        import uuid as _judge_uuid
+        eval_id = str(_judge_uuid.uuid4())
+        eval_data = {
+            "id": eval_id,
+            "session_id": request.chat_id,
+            "message_index": request.message_index,
+            "user_query": request.user_query,
+            "assistant_response": request.assistant_response,
+            **evaluation,
+        }
+
+        if rag_system and hasattr(rag_system, 'chat_storage'):
+            rag_system.chat_storage.save_llm_evaluation(eval_data)
+
+        return {"status": "success", "evaluation": evaluation, "id": eval_id}
+
+    except Exception as e:
+        logger.error(f"Judge evaluation failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/judge/{chat_id}/evaluations")
+async def get_evaluations(chat_id: str):
+    """Get all LLM judge evaluations for a chat session."""
+    try:
+        if rag_system and hasattr(rag_system, 'chat_storage'):
+            evaluations = rag_system.chat_storage.get_llm_evaluations(chat_id)
+            return {"evaluations": evaluations}
+        return {"evaluations": []}
+    except Exception as e:
+        logger.error(f"Failed to get evaluations: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/judge/evaluation/{eval_id}")
+async def delete_evaluation(eval_id: str):
+    """Delete a specific LLM evaluation."""
+    try:
+        if rag_system and hasattr(rag_system, 'chat_storage'):
+            rag_system.chat_storage.delete_llm_evaluation(eval_id)
+        return {"status": "success"}
+    except Exception as e:
+        logger.error(f"Failed to delete evaluation: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ═══════════════════════════════════════════════════
 # Deep Research Endpoints
 # ═══════════════════════════════════════════════════
 

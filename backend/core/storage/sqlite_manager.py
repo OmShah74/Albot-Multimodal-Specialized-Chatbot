@@ -192,8 +192,53 @@ class SQLiteStorageManager:
                     )
                 """)
                 
+                # ── LLM Judge evaluations ─────────────────
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS llm_evaluations (
+                        id TEXT PRIMARY KEY,
+                        session_id TEXT NOT NULL,
+                        message_index INTEGER NOT NULL,
+                        user_query TEXT NOT NULL,
+                        assistant_response TEXT NOT NULL,
+                        relevance INTEGER DEFAULT 5,
+                        accuracy INTEGER DEFAULT 5,
+                        completeness INTEGER DEFAULT 5,
+                        clarity INTEGER DEFAULT 5,
+                        depth INTEGER DEFAULT 5,
+                        conciseness INTEGER DEFAULT 5,
+                        helpfulness INTEGER DEFAULT 5,
+                        factual_grounding INTEGER DEFAULT 5,
+                        coherence INTEGER DEFAULT 5,
+                        engagement INTEGER DEFAULT 5,
+                        safety INTEGER DEFAULT 5,
+                        overall_score REAL DEFAULT 5.0,
+                        verdict TEXT DEFAULT 'fair',
+                        strengths TEXT,
+                        weaknesses TEXT,
+                        suggestions TEXT,
+                        reasoning TEXT DEFAULT '',
+                        evaluation_time_ms REAL DEFAULT 0,
+                        created_at TEXT NOT NULL,
+                        FOREIGN KEY (session_id) REFERENCES chats (id) ON DELETE CASCADE
+                    )
+                """)
+
+                # Migration: add new judge columns if missing
+                cursor.execute("PRAGMA table_info(llm_evaluations)")
+                eval_cols = [info[1] for info in cursor.fetchall()]
+                for new_col, default in [
+                    ("factual_grounding", "5"),
+                    ("coherence", "5"),
+                    ("engagement", "5"),
+                    ("safety", "5"),
+                    ("reasoning", "''"),
+                ]:
+                    if eval_cols and new_col not in eval_cols:
+                        cursor.execute(f"ALTER TABLE llm_evaluations ADD COLUMN {new_col} {'INTEGER' if default.isdigit() else 'TEXT'} DEFAULT {default}")
+                        logger.info(f"Migrated llm_evaluations: added {new_col} column")
+
                 conn.commit()
-                logger.info("SQLite database initialized (core + memory + deep research tables)")
+                logger.info("SQLite database initialized (core + memory + deep research + judge tables)")
         except Exception as e:
             logger.error(f"Failed to initialize SQLite DB: {e}")
             raise
@@ -959,3 +1004,93 @@ class SQLiteStorageManager:
         except Exception as e:
             logger.error(f"Failed to get research progress: {e}")
             return []
+
+    # ═══════════════════════════════════════════════════
+    # LLM Judge Evaluations
+    # ═══════════════════════════════════════════════════
+
+    def save_llm_evaluation(self, eval_data: Dict):
+        """Save an LLM judge evaluation for a response."""
+        try:
+            eval_id = eval_data.get("id", str(uuid.uuid4()))
+            now = datetime.utcnow().isoformat()
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT OR REPLACE INTO llm_evaluations
+                    (id, session_id, message_index, user_query, assistant_response,
+                     relevance, accuracy, completeness, clarity, depth, conciseness, helpfulness,
+                     factual_grounding, coherence, engagement, safety,
+                     overall_score, verdict, strengths, weaknesses, suggestions, reasoning,
+                     evaluation_time_ms, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    eval_id,
+                    eval_data["session_id"],
+                    eval_data["message_index"],
+                    eval_data["user_query"],
+                    eval_data.get("assistant_response", "")[:2000],
+                    eval_data.get("relevance", 5),
+                    eval_data.get("accuracy", 5),
+                    eval_data.get("completeness", 5),
+                    eval_data.get("clarity", 5),
+                    eval_data.get("depth", 5),
+                    eval_data.get("conciseness", 5),
+                    eval_data.get("helpfulness", 5),
+                    eval_data.get("factual_grounding", 5),
+                    eval_data.get("coherence", 5),
+                    eval_data.get("engagement", 5),
+                    eval_data.get("safety", 5),
+                    eval_data.get("overall_score", 5.0),
+                    eval_data.get("verdict", "fair"),
+                    json.dumps(eval_data.get("strengths", [])),
+                    json.dumps(eval_data.get("weaknesses", [])),
+                    json.dumps(eval_data.get("suggestions", [])),
+                    eval_data.get("reasoning", ""),
+                    eval_data.get("evaluation_time_ms", 0),
+                    now,
+                ))
+                conn.commit()
+            logger.info(f"Saved LLM evaluation {eval_id} for session {eval_data['session_id']}")
+            return eval_id
+        except Exception as e:
+            logger.error(f"Failed to save LLM evaluation: {e}")
+            raise
+
+    def get_llm_evaluations(self, session_id: str) -> List[Dict]:
+        """Get all LLM judge evaluations for a chat session."""
+        try:
+            with self._get_connection() as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT * FROM llm_evaluations
+                    WHERE session_id = ?
+                    ORDER BY message_index ASC
+                """, (session_id,))
+                rows = cursor.fetchall()
+                results = []
+                for row in rows:
+                    d = dict(row)
+                    # Parse JSON fields
+                    for field in ("strengths", "weaknesses", "suggestions"):
+                        try:
+                            d[field] = json.loads(d.get(field) or "[]")
+                        except (json.JSONDecodeError, TypeError):
+                            d[field] = []
+                    results.append(d)
+                return results
+        except Exception as e:
+            logger.error(f"Failed to get LLM evaluations for {session_id}: {e}")
+            return []
+
+    def delete_llm_evaluation(self, eval_id: str):
+        """Delete a specific LLM evaluation."""
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM llm_evaluations WHERE id = ?", (eval_id,))
+                conn.commit()
+            logger.info(f"Deleted LLM evaluation {eval_id}")
+        except Exception as e:
+            logger.error(f"Failed to delete LLM evaluation {eval_id}: {e}")
