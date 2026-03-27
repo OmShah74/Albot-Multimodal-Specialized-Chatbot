@@ -11,11 +11,15 @@ interface SettingsModalProps {
   onClose: () => void;
 }
 
+import { GraphVisualizer } from './GraphVisualizer';
+
 export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [sources, setSources] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [stats, setStats] = useState<any>(null);
+  const [showGraph, setShowGraph] = useState(false);
 
+  // ... (keep fetchData etc)
   const fetchData = async () => {
     try {
       setLoading(true);
@@ -27,7 +31,6 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       setStats(statsData);
     } catch (e) {
       console.error('Failed to fetch data', e);
-      // Fallback if statistics fails but sources might work
       try {
         const sourcesData = await api.listSources();
         setSources(sourcesData || []);
@@ -42,6 +45,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   useEffect(() => {
     if (isOpen) {
       fetchData();
+      setShowGraph(false);
     }
   }, [isOpen]);
 
@@ -93,66 +97,96 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
         exit={{ opacity: 0, scale: 0.95 }}
-        className="w-full max-w-3xl bg-[#0a0a0a] border border-white/10 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+        className={cn(
+          "w-full bg-[#0a0a0a] border border-white/10 rounded-2xl shadow-2xl overflow-hidden flex flex-col transition-all duration-500",
+          showGraph ? "max-w-6xl h-[85vh]" : "max-w-3xl max-h-[90vh]"
+        )}
       >
         <div className="p-4 border-b border-white/10 flex justify-between items-center bg-white/5 shrink-0">
           <h2 className="font-semibold flex items-center gap-2 text-white">
             <Database className="w-4 h-4 text-primary" />
-            Knowledge Base & Settings
+            {showGraph ? "Knowledge Graph Visualization" : "Knowledge Base & Settings"}
           </h2>
           <div className="flex items-center gap-4">
-            <button onClick={fetchData} className="text-neutral-400 hover:text-white transition-colors">
-              <RefreshCw className={cn("w-4 h-4", loading && "animate-spin")} />
-            </button>
+            {showGraph && (
+              <button 
+                onClick={() => setShowGraph(false)}
+                className="text-xs px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded-lg transition-colors font-bold text-white tracking-widest uppercase"
+              >
+                Back to Settings
+              </button>
+            )}
+            {!showGraph && (
+              <button onClick={fetchData} className="text-neutral-400 hover:text-white transition-colors">
+                <RefreshCw className={cn("w-4 h-4", loading && "animate-spin")} />
+              </button>
+            )}
             <button onClick={onClose} className="p-1 hover:bg-white/10 rounded-lg transition-colors text-neutral-400">
               <X className="w-4 h-4" />
             </button>
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-6 space-y-8">
-          {/* Stats section */}
-          {stats && (
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <div className="bg-white/5 border border-white/5 p-4 rounded-xl">
-                 <p className="text-[10px] uppercase tracking-wider text-neutral-500 font-bold mb-1">Total Atoms</p>
-                 <p className="text-2xl font-bold text-white">{stats.database.total_nodes}</p>
-              </div>
-              <div className="bg-white/5 border border-white/5 p-4 rounded-xl">
-                 <p className="text-[10px] uppercase tracking-wider text-neutral-500 font-bold mb-1">Total Edges</p>
-                 <p className="text-2xl font-bold text-white">{stats.database.total_edges}</p>
-              </div>
-            </div>
-          )}
-
-          <div className="space-y-4">
-            <h3 className="text-sm font-medium text-white/70">Ingested Media (Documents, Audio, Video, Datasets)</h3>
-            <div className="grid gap-2">
-              {sources.length === 0 ? (
-                <div className="text-center py-12 bg-white/5 border border-dashed border-white/10 rounded-2xl text-neutral-600 italic text-sm">
-                  No media ingested yet.
+        {showGraph ? (
+          <div className="flex-1 w-full h-full p-4 relative bg-black/40">
+            <GraphVisualizer />
+          </div>
+        ) : (
+          <div className="flex-1 overflow-y-auto p-6 space-y-8">
+            {/* Stats section */}
+            {stats && (
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="bg-white/5 border border-white/5 p-4 rounded-xl">
+                   <p className="text-[10px] uppercase tracking-wider text-neutral-500 font-bold mb-1">Total Atoms</p>
+                   <p className="text-2xl font-bold text-white">{stats.database.total_nodes}</p>
                 </div>
-              ) : (
-                sources.map((source) => (
-                  <div key={source} className="flex items-center justify-between p-3 bg-white/5 rounded-xl border border-white/5 group hover:border-white/10 transition-colors">
-                    <div className="flex items-center gap-3 overflow-hidden">
-                      <div className="w-8 h-8 rounded-lg bg-black/40 flex items-center justify-center shrink-0">
-                        {getFileIcon(source)}
-                      </div>
-                      <span className="text-sm text-neutral-300 truncate" title={source}>{source}</span>
-                    </div>
-                    <button 
-                      onClick={() => handleDeleteSource(source)}
-                      className="p-2 text-neutral-600 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+                <div className="bg-white/5 border border-white/5 p-4 rounded-xl">
+                   <p className="text-[10px] uppercase tracking-wider text-neutral-500 font-bold mb-1">Total Edges</p>
+                   <p className="text-2xl font-bold text-white">{stats.database.total_edges}</p>
+                </div>
+                
+                <div 
+                  onClick={() => setShowGraph(true)}
+                  className="col-span-2 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 p-4 rounded-xl cursor-pointer transition-colors flex items-center justify-between group"
+                >
+                  <div>
+                    <p className="text-[10px] uppercase tracking-wider text-emerald-400/70 font-bold mb-1">Interactive Feature</p>
+                    <p className="text-lg font-bold text-emerald-400 group-hover:text-emerald-300">Visualize Knowledge Graph</p>
                   </div>
-                ))
-              )}
+                  <Database className="w-8 h-8 text-emerald-500/50 group-hover:text-emerald-400 transition-colors" />
+                </div>
+              </div>
+            )}
+
+            <div className="space-y-4">
+              <h3 className="text-sm font-medium text-white/70">Ingested Media (Documents, Audio, Video, Datasets)</h3>
+              <div className="grid gap-2">
+                {sources.length === 0 ? (
+                  <div className="text-center py-12 bg-white/5 border border-dashed border-white/10 rounded-2xl text-neutral-600 italic text-sm">
+                    No media ingested yet.
+                  </div>
+                ) : (
+                  sources.map((source) => (
+                    <div key={source} className="flex items-center justify-between p-3 bg-white/5 rounded-xl border border-white/5 group hover:border-white/10 transition-colors">
+                      <div className="flex items-center gap-3 overflow-hidden">
+                        <div className="w-8 h-8 rounded-lg bg-black/40 flex items-center justify-center shrink-0">
+                          {getFileIcon(source)}
+                        </div>
+                        <span className="text-sm text-neutral-300 truncate" title={source}>{source}</span>
+                      </div>
+                      <button 
+                        onClick={() => handleDeleteSource(source)}
+                        className="p-2 text-neutral-600 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
             </div>
           </div>
-        </div>
+        )}
       </motion.div>
     </div>
   );

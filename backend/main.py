@@ -276,6 +276,20 @@ async def get_statistics():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/graph/visualization")
+async def get_graph_visualization(limit: int = 2000):
+    """Get full knowledge graph data for visualization"""
+    try:
+        if not rag_system or not hasattr(rag_system, 'storage'):
+            return {"nodes": [], "links": []}
+            
+        # ArangoStorageManager handles hybrid graph operations
+        return rag_system.storage.get_full_graph_data(limit=limit)
+    except Exception as e:
+        logger.error(f"Failed to get graph visualization: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 
 # --- Chat Management Endpoints ---
 
