@@ -1,9 +1,25 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import dynamic from 'next/dynamic';
 
 const ForceGraph2D = dynamic(() => import('react-force-graph-2d'), { ssr: false });
 import { Maximize2, Minimize2, RefreshCw, ZoomIn, ZoomOut, Database } from 'lucide-react';
 import { api } from '@/lib/api';
+
+// Distinct color palette for different ingested sources
+const SOURCE_PALETTE = [
+  '#60a5fa', // blue
+  '#f87171', // red
+  '#34d399', // green
+  '#c084fc', // purple
+  '#fb923c', // orange
+  '#22d3ee', // cyan
+  '#facc15', // yellow
+  '#f472b6', // pink
+  '#a3e635', // lime
+  '#818cf8', // indigo
+  '#2dd4bf', // teal
+  '#e879f9', // fuchsia
+];
 
 interface GraphVisualizerProps {
   onClose?: () => void;
@@ -72,15 +88,22 @@ export function GraphVisualizer({ onClose, isFullscreen = false }: GraphVisualiz
     }
   }, []);
 
-  // Node Styling logic
+  // Build a stable source → color mapping from the loaded graph data
+  const sourceColorMap = useMemo(() => {
+    const uniqueSources = [...new Set(
+      data.nodes.map((n: any) => n.source || n.name || 'unknown')
+    )];
+    const map: Record<string, string> = {};
+    uniqueSources.forEach((src, i) => {
+      map[src] = SOURCE_PALETTE[i % SOURCE_PALETTE.length];
+    });
+    return map;
+  }, [data.nodes]);
+
+  // Node Styling logic — color by ingested source
   const getNodeColor = (node: any) => {
-    const group = (node.group || '').toLowerCase();
-    if (group === 'text') return '#60a5fa'; // blue-400
-    if (group === 'image') return '#818cf8'; // indigo-400
-    if (group === 'audio') return '#34d399'; // emerald-400
-    if (group === 'video') return '#f87171'; // red-400 
-    if (group === 'unknown') return '#a3a3a3'; // neutral-400
-    return '#facc15'; // yellow-400
+    const source = node.source || node.name || 'unknown';
+    return sourceColorMap[source] || '#94a3b8';
   };
 
   return (
@@ -103,6 +126,28 @@ export function GraphVisualizer({ onClose, isFullscreen = false }: GraphVisualiz
             <span className="text-blue-400 font-black">{data.links.length}</span>
           </div>
         </div>
+
+        {/* Source color legend */}
+        {Object.keys(sourceColorMap).length > 0 && (
+          <div className="mt-2 pt-2 border-t border-white/10 flex flex-col gap-1">
+            <span className="text-[10px] text-neutral-500 font-bold uppercase tracking-widest px-2">Sources</span>
+            {Object.entries(sourceColorMap).map(([src, color]) => (
+              <div key={src} className="flex items-center gap-2 px-2 py-0.5">
+                <div
+                  className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                  style={{ background: color, boxShadow: `0 0 6px ${color}66` }}
+                />
+                <span
+                  className="text-[11px] text-neutral-400 truncate"
+                  style={{ maxWidth: '160px' }}
+                  title={src}
+                >
+                  {src.length > 28 ? src.slice(0, 26) + '...' : src}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="absolute bottom-4 right-4 z-10 flex items-center gap-2 p-1 bg-black/60 backdrop-blur-md border border-white/10 rounded-xl shadow-2xl">

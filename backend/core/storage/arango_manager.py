@@ -519,12 +519,37 @@ class ArangoStorageManager:
     
     def get_full_graph_data(self, limit: int = 1500) -> Dict:
         """Get full graph data formatted for frontend visualization (nodes and links).
-        Fetches edges first to ensure the graph is heavily connected, rather than random islands."""
+        Fetches nodes first to guarantee all ingested sources are represented,
+        then samples edges randomly to cover cross-source connections."""
         try:
-            # 1. Fetch edges first to guarantee connectivity
+            # 1. Fetch nodes first — guarantees every source is represented
+            nodes_query = f"""
+            FOR doc IN {self.config.nodes_collection}
+                LIMIT @limit
+                RETURN {{
+                    id: doc._key,
+                    name: doc.source ? doc.source : 'Knowledge Node',
+                    label: doc.content ? (LENGTH(doc.content) > 100 ? CONCAT(LEFT(doc.content, 100), '...') : doc.content) : 'Empty Content',
+                    group: doc.modality ? doc.modality : 'text',
+                    source: doc.source ? doc.source : 'unknown',
+                    resolution: doc.resolution ? doc.resolution : 'unknown'
+                }}
+            """
+            nodes = list(self.db.aql.execute(nodes_query, bind_vars={'limit': limit}))
+
+            if not nodes:
+                return {"nodes": [], "links": []}
+
+            node_id_set = {n['id'] for n in nodes}
+
+            # 2. Sample edges randomly so all sources get proportional coverage.
+            #    A bare LIMIT in insertion order would only return the first-
+            #    ingested source's edges, hiding later sources entirely.
+            edge_budget = limit * 4
             edges_query = f"""
             FOR e IN {self.config.edges_collection}
-                LIMIT @edge_limit
+                SORT RAND()
+                LIMIT @fetch_limit
                 RETURN {{
                     id: e._key,
                     source: PARSE_IDENTIFIER(e._from).key,
@@ -533,50 +558,19 @@ class ArangoStorageManager:
                     weight: e.weight
                 }}
             """
-            edges_cursor = self.db.aql.execute(edges_query, bind_vars={'edge_limit': limit * 2})
-            edges = list(edges_cursor)
-            
-            # 2. Extract unique node keys connected by these edges
-            node_keys = set()
-            for e in edges:
-                node_keys.add(e['source'])
-                node_keys.add(e['target'])
-            
-            node_ids = list(node_keys)
-            
-            # 3. Fetch ONLY those connected nodes AND provide detailed content labels
-            if node_ids:
-                nodes_query = f"""
-                FOR doc IN {self.config.nodes_collection}
-                    FILTER doc._key IN @node_ids
-                    RETURN {{
-                        id: doc._key,
-                        name: doc.source ? doc.source : 'Knowledge Node',
-                        label: doc.content ? (LENGTH(doc.content) > 100 ? CONCAT(LEFT(doc.content, 100), '...') : doc.content) : 'Empty Content',
-                        group: doc.modality ? doc.modality : 'text',
-                        resolution: doc.resolution ? doc.resolution : 'unknown'
-                    }}
-                """
-                nodes_cursor = self.db.aql.execute(nodes_query, bind_vars={'node_ids': node_ids})
-                nodes = list(nodes_cursor)
-            else:
-                # Fallback if there are strictly zero edges in the entire database
-                fallback_query = f"""
-                FOR doc IN {self.config.nodes_collection}
-                    LIMIT 200
-                    RETURN {{
-                        id: doc._key,
-                        name: doc.source ? doc.source : 'Knowledge Node',
-                        label: doc.content ? (LENGTH(doc.content) > 100 ? CONCAT(LEFT(doc.content, 100), '...') : doc.content) : 'Empty Content',
-                        group: doc.modality ? doc.modality : 'text',
-                        resolution: doc.resolution ? doc.resolution : 'unknown'
-                    }}
-                """
-                nodes = list(self.db.aql.execute(fallback_query))
-            
+            raw_edges = list(self.db.aql.execute(
+                edges_query, bind_vars={'fetch_limit': edge_budget}
+            ))
+
+            # Keep only edges whose both endpoints are in the fetched node set
+            edges = [
+                e for e in raw_edges
+                if e['source'] in node_id_set and e['target'] in node_id_set
+            ]
+
             return {
                 "nodes": nodes,
-                "links": edges
+                "links": edges,
             }
         except Exception as e:
             logger.error(f"Failed to get full graph data: {e}")

@@ -65,7 +65,10 @@ class DeepResearchOrchestrator:
         """Mark a session as cancelled. The research loop will stop at the next step."""
         self._cancelled.add(session_id)
         if session_id in self._sessions:
-            self._sessions[session_id]["status"] = ResearchStatus.CANCELLED
+            # Use "stopping" so the frontend keeps polling while _finalize()
+            # synthesises the partial findings. The real CANCELLED status is
+            # written by _finalize() once the report is ready.
+            self._sessions[session_id]["status"] = "stopping"
         logger.info(f"[DeepResearch] Session {session_id} marked for cancellation")
 
     def is_cancelled(self, session_id: str) -> bool:

@@ -368,6 +368,1278 @@ EmbeddingEngine.embed_query() and ArangoDB vector search infrastructure that is
 already built for the RAG knowledge base.
 
 
+═════════════════════════════════════════════════════════════════════════════════
+  EXTENDED FUTURE SCOPE — BROADER SKILLS & FUNCTIONALITIES
+═════════════════════════════════════════════════════════════════════════════════
+(Features below cover domains beyond the deep research pipeline — data science,
+productivity, voice, code intelligence, collaboration, content generation,
+safety, platform integrations, and agentic capabilities.)
+
+
+─────────────────────────────────────────────────────────────────────────────────
+15. CONVERSATIONAL DATA ANALYST
+─────────────────────────────────────────────────────────────────────────────────
+
+The Problem: Users can ingest CSVs and Excel files, but they become dumb text
+chunks. There is no way to ask "What's the average revenue by quarter?" and get
+an actual computed answer with a chart. The current pipeline treats structured
+data the same as unstructured prose.
+
+What to Build: A DataAnalystSkill that detects when a user's query references
+an ingested tabular dataset (or when they upload one mid-conversation). Instead
+of doing RAG retrieval, the skill:
+1. Loads the dataset into a pandas DataFrame in a sandboxed environment.
+2. Uses the LLM to translate the natural-language question into a pandas
+   operation chain (e.g., df.groupby('region')['revenue'].mean()).
+3. Executes the generated code in a restricted sandbox (RestrictedPython or
+   a subprocess jail) — never eval() on raw LLM output.
+4. If the result is numeric/tabular, renders it as a formatted markdown table.
+5. If the query implies visualization ("show me a chart", "plot", "trend"),
+   generates a matplotlib/plotly figure, saves it as a PNG, and returns it
+   inline in the chat as a base64 image.
+6. Supports follow-up queries: "Now filter that to only Q4" retains the
+   DataFrame state across turns within the same chat session.
+7. Automatically profiles new datasets on upload: row count, column types,
+   missing values, basic statistics, and stores a DataProfile object that
+   the LLM uses to write better queries.
+
+Integration: New backend/core/skills/data_analyst.py. The main orchestrator
+detects tabular intent via keyword heuristics ("average", "sum", "plot",
+"correlate", column names found in ingested datasets) and routes to this skill
+instead of the standard RAG path. Frontend gets a new DataResultCard component
+that renders tables and inline charts.
+
+
+─────────────────────────────────────────────────────────────────────────────────
+16. DOCUMENT GENERATOR — REPORTS, PROPOSALS, AND BRIEFS
+─────────────────────────────────────────────────────────────────────────────────
+
+The Problem: Albot is excellent at answering questions but cannot produce
+structured deliverables. A user who researches "competitive landscape for
+edge AI chips" cannot say "now write me a 10-page executive brief from that."
+
+What to Build: A DocumentGeneratorSkill triggered by explicit commands
+("/generate report", "/write proposal", "/draft brief") or detected intent.
+The skill:
+1. Takes a document type (report, proposal, executive brief, literature review,
+   technical spec, meeting summary) and an optional topic or prior chat context.
+2. Uses a type-specific structural template: e.g., executive briefs get
+   Executive Summary → Key Findings → Competitive Analysis → Recommendations →
+   Appendix.
+3. For each section, runs a focused LLM call with relevant context pulled from
+   the knowledge base, recent chat history, or prior deep research sessions.
+4. Assembles the sections into a coherent document with consistent tone,
+   cross-references between sections, and a table of contents.
+5. Exports to multiple formats: Markdown (inline in chat), PDF (via
+   weasyprint or reportlab), DOCX (via python-docx), and HTML.
+6. Provides a download link in the chat interface.
+
+Integration: New backend/core/skills/document_generator.py. New API endpoint
+POST /generate/document with body {type, topic, context_chat_id, format}.
+Frontend gets a DocumentExportModal component with format selection and
+preview.
+
+
+─────────────────────────────────────────────────────────────────────────────────
+17. ADAPTIVE LEARNING ENGINE — QUIZZES, FLASHCARDS, AND SPACED REPETITION
+─────────────────────────────────────────────────────────────────────────────────
+
+The Problem: Users ingest textbooks, papers, and lecture notes for studying,
+but Albot only supports free-form Q&A. There is no active learning support —
+no quizzes, no flashcards, no way to test comprehension.
+
+What to Build: A LearningEngineSkill that transforms ingested content into
+active learning tools:
+1. Quiz Generation: Given a document or topic, the LLM generates N questions
+   at a specified difficulty (easy/medium/hard) and type (multiple choice,
+   true/false, short answer, fill-in-the-blank). Each question includes the
+   correct answer and an explanation referencing the source material.
+2. Flashcard Decks: Extracts key concepts → generates front/back flashcard
+   pairs. Stored in a flashcards SQLite table. Supports export to Anki format
+   (via genanki library).
+3. Spaced Repetition Scheduler: Implements SM-2 algorithm. When a user reviews
+   a flashcard and rates difficulty (1-5), the scheduler computes the next
+   review date. Cards due for review are surfaced proactively at the start of
+   chat sessions.
+4. Knowledge Gap Detection: After a quiz, analyzes which topics the user got
+   wrong, maps them back to source documents, and suggests targeted re-reading
+   sections or generates focused follow-up quizzes on weak areas.
+5. Progress Dashboard: Track accuracy over time, mastery per topic, streak
+   counts.
+
+Integration: New backend/core/skills/learning_engine.py. New SQLite tables:
+flashcard_decks, flashcards, quiz_attempts, review_schedule. Frontend gets
+QuizPanel and FlashcardViewer components. API endpoints:
+POST /learn/generate-quiz, POST /learn/generate-flashcards,
+GET /learn/due-reviews, POST /learn/submit-review.
+
+
+─────────────────────────────────────────────────────────────────────────────────
+18. VOICE INTERFACE — SPEECH INPUT AND AUDIO OUTPUT
+─────────────────────────────────────────────────────────────────────────────────
+
+The Problem: Interaction is text-only. Users cannot speak to Albot or listen
+to responses, which limits usability for hands-free workflows, accessibility,
+and mobile use.
+
+What to Build:
+Input: Add a microphone button to the chat input. On click, the browser's
+MediaRecorder API captures audio, which is sent as a WAV blob to a new
+POST /voice/transcribe endpoint. The backend uses the already-loaded Whisper
+model (MultimodalProcessor already has it) to transcribe. The transcript is
+inserted into the chat input field for user review before sending, or
+auto-sent if the user enables "auto-send" mode.
+
+Output: After a response is generated, an optional "Read aloud" button appears
+next to the response. On click, the response text is sent to
+POST /voice/synthesize. The backend uses a TTS engine — either edge-tts
+(free, Microsoft Azure voices, pip installable), Coqui TTS (local,
+open-source), or OpenAI TTS API. Returns an audio stream that the frontend
+plays via an <audio> element.
+
+Streaming mode: For long responses, use chunked TTS — split the response into
+sentences, synthesize each as a separate audio segment, and stream them as
+they complete so playback starts within 1-2 seconds.
+
+Integration: New backend/core/skills/voice_interface.py. Two new API endpoints.
+Frontend gets VoiceInputButton and AudioPlaybackButton components. Whisper
+model is shared with the existing MultimodalProcessor instance to avoid double
+memory usage.
+
+
+─────────────────────────────────────────────────────────────────────────────────
+19. MULTI-LANGUAGE PIPELINE — AUTO-DETECT, TRANSLATE, RESPOND
+─────────────────────────────────────────────────────────────────────────────────
+
+The Problem: Albot only works well in English. A user who ingests a French PDF
+or asks a question in Spanish gets degraded retrieval (English embeddings
+perform poorly on non-English text) and inconsistent response language.
+
+What to Build: A LanguagePipeline middleware that wraps the entire query and
+response flow:
+1. Language Detection: Use langdetect or fasttext-langdetect on every incoming
+   query. If the detected language is not English, flag the query.
+2. Query Translation: Translate non-English queries to English before
+   embedding and retrieval (using an LLM translation call or Helsinki-NLP
+   MarianMT models which are small and local).
+3. Retrieval proceeds in English (where embeddings are strongest).
+4. Response Translation: After the LLM generates the English response,
+   translate it back to the user's detected language.
+5. Bilingual Mode: Optionally return both the English response and the
+   translated response, useful for language learners.
+6. Ingestion Translation: When a non-English document is ingested, run
+   translation at chunk level before embedding. Store both original and
+   translated text. The knowledge atom gets a language: str field and a
+   translated_content: Optional[str] field.
+7. Per-user language preference stored in session settings, overriding
+   auto-detection.
+
+Integration: LanguagePipeline as a middleware class in
+backend/core/language/translation_pipeline.py. Wraps LLMRouter.complete()
+calls. The orchestrator checks query language before routing. Frontend gets a
+language selector dropdown in settings.
+
+
+─────────────────────────────────────────────────────────────────────────────────
+20. GITHUB/GITLAB INTEGRATION — PR REVIEW, ISSUE ANALYSIS, CODEBASE Q&A
+─────────────────────────────────────────────────────────────────────────────────
+
+The Problem: Developers use Albot for research but switch to a different tool
+for code review. There is no bridge between the knowledge base and a team's
+actual codebase or issue tracker.
+
+What to Build: A GitIntegrationSkill:
+1. Repository Connection: User provides a GitHub/GitLab repo URL + personal
+   access token. The backend clones (shallow, depth=1) or uses the API to
+   fetch file trees and contents.
+2. PR Review Mode: Given a PR number, the skill fetches the diff via GitHub
+   API (GET /repos/{owner}/{repo}/pulls/{num}/files), parses each changed
+   file, and asks the LLM to review for: bugs, security vulnerabilities,
+   style inconsistencies, missing tests, and performance concerns. Returns
+   structured ReviewComment objects with file, line number, severity, and
+   suggestion.
+3. Issue Analysis: Fetches open issues, clusters them by topic (using
+   embeddings), and generates a prioritized summary: "You have 12 open bugs,
+   5 feature requests, and 3 documentation issues. The most urgent cluster
+   is around authentication failures (issues #42, #47, #51)."
+4. Codebase Q&A: After cloning, runs the CodeRepositoryIngester (Feature #10
+   from the existing scope) and enables RAG queries against the code:
+   "How does error handling work in the API layer?"
+5. Commit Changelog Generator: Given a date range or tag range, fetches
+   commits and generates a human-readable changelog grouped by category
+   (features, fixes, refactors).
+
+Integration: New backend/core/integrations/git_integration.py. Uses PyGithub
+or httpx for API calls. Frontend gets a GitHubConnectPanel in settings and a
+PRReviewPanel in the chat interface.
+
+
+─────────────────────────────────────────────────────────────────────────────────
+21. SCHEDULED RESEARCH DIGESTS — AUTOMATED TOPIC MONITORING
+─────────────────────────────────────────────────────────────────────────────────
+
+The Problem: Research is always user-initiated. A user tracking "edge AI
+hardware" must manually run a new deep research session every week to stay
+updated. There is no proactive monitoring.
+
+What to Build: A ResearchScheduler that lets users create "watch topics":
+1. Users define a topic and a schedule (daily, weekly, biweekly).
+2. At the scheduled time, a background task runs a lightweight version of
+   deep research: 2-3 search steps, focused on recency (search queries
+   include "2026", "latest", "recent").
+3. The system compares new findings against the user's existing research
+   memory (Feature #6). Only genuinely new information is kept.
+4. A digest is generated: a 500-word summary of what's new, with source
+   links and a diff-style highlight of what changed since the last digest.
+5. Delivery options: in-app notification (new chat message), email
+   (via SendGrid/SMTP), or webhook (POST to a user-defined URL — useful
+   for Slack/Discord/Teams integration).
+6. The digest is stored as a regular chat message so users can ask follow-up
+   questions against it.
+
+Integration: New backend/core/scheduling/research_scheduler.py using APScheduler.
+New SQLite tables: watch_topics, digest_history. API endpoints:
+POST /schedule/watch, GET /schedule/topics, DELETE /schedule/watch/{id}.
+Frontend gets a WatchTopicPanel in the sidebar.
+
+
+─────────────────────────────────────────────────────────────────────────────────
+22. DOMAIN SPECIALIST MODES — LEGAL, MEDICAL, FINANCIAL, ACADEMIC
+─────────────────────────────────────────────────────────────────────────────────
+
+The Problem: Albot uses generic prompts for all queries. A lawyer analyzing a
+contract, a doctor reviewing clinical notes, and a finance analyst reading
+10-K filings all get the same generic RAG treatment. Domain-specific
+terminology, reasoning patterns, and output formats are lost.
+
+What to Build: A DomainModeSelector that lets users switch Albot into a
+specialist mode. Each mode configures:
+1. System Prompt Override: Domain-tailored system prompts that set tone,
+   terminology expectations, and reasoning style. E.g., Legal mode: "You are
+   a legal research assistant. Cite statutes by jurisdiction. Flag ambiguous
+   clauses. Never provide legal advice — frame everything as analysis."
+2. Custom Retrieval Weights: Legal mode boosts exact keyword matches (statute
+   numbers are precise). Medical mode boosts recency (treatment guidelines
+   change). Financial mode boosts numerical precision.
+3. Domain-Specific Post-Processing:
+   - Legal: Extract clause references, flag risk levels (low/medium/high),
+     generate clause-by-clause comparison tables.
+   - Medical: Extract drug names, dosages, contraindications. Flag
+     off-label usage. Add safety disclaimers automatically.
+   - Financial: Extract financial metrics (P/E, EBITDA, margins), generate
+     comparison tables, compute ratios from raw data.
+   - Academic: Auto-generate citation lists, identify methodology types,
+     flag statistical claims that lack confidence intervals.
+4. Domain Glossary: Each mode has a curated terminology list that helps the
+   embedding engine disambiguate domain-specific terms.
+5. Output Templates: Each mode has preferred output formats (legal memos,
+   clinical summaries, investment briefs, literature reviews).
+
+Integration: New backend/core/skills/domain_modes.py with a DomainMode enum
+and DomainConfig dataclass. The orchestrator loads the active mode's config
+before each query. Frontend gets a mode selector dropdown in the header bar
+with icons for each domain.
+
+
+─────────────────────────────────────────────────────────────────────────────────
+23. MULTI-USER COLLABORATIVE WORKSPACES
+─────────────────────────────────────────────────────────────────────────────────
+
+The Problem: Albot is single-user. A team of researchers cannot share a
+knowledge base, collaborate on research sessions, or see each other's findings.
+Every user operates in isolation.
+
+What to Build: A WorkspaceSystem with:
+1. User Authentication: Basic user accounts (email + password, or OAuth via
+   Google/GitHub). JWT-based session tokens.
+2. Workspaces: Named collections of knowledge bases, chat sessions, and
+   research history. A workspace can be private (single user) or shared
+   (team).
+3. Shared Knowledge Bases: Multiple users ingest documents into the same
+   ArangoDB collections, scoped by workspace_id. All team members query the
+   same knowledge.
+4. Collaborative Research: A deep research session can be shared — all team
+   members see real-time progress and can view the final report. Comments
+   and annotations on research findings.
+5. Permission Levels: Owner (full control), Editor (can ingest, query, and
+   run research), Viewer (read-only access to existing research and chats).
+6. Activity Feed: A workspace-level activity log showing who ingested what,
+   who ran which research, and recent queries — providing team awareness
+   without real-time presence tracking.
+7. Conflict-Free Ingestion: Multiple users ingesting simultaneously use
+   optimistic concurrency in ArangoDB (document revision checks) to prevent
+   data corruption.
+
+Integration: New backend/core/auth/ module with user_manager.py and
+workspace_manager.py. New SQLite tables: users, workspaces, workspace_members,
+activity_log. All existing API endpoints get an Authorization header check.
+Frontend gets LoginPage, WorkspaceSwitcher, and TeamActivityPanel components.
+
+
+─────────────────────────────────────────────────────────────────────────────────
+24. CITATION MANAGER AND MULTI-FORMAT EXPORT
+─────────────────────────────────────────────────────────────────────────────────
+
+The Problem: Deep research produces source lists, but they are plain URLs.
+Researchers need properly formatted citations (APA, MLA, Chicago, BibTeX,
+IEEE) and there is no way to export them into reference managers like Zotero
+or Mendeley.
+
+What to Build: A CitationManagerSkill:
+1. Metadata Extraction: For every source URL in a research session, attempt
+   to extract full bibliographic metadata: title, authors, journal/venue,
+   year, DOI, volume, issue, pages. Use multiple strategies:
+   - Scrape <meta> tags (citation_title, citation_author, citation_doi)
+   - Query CrossRef API (api.crossref.org/works?query=...) for DOI lookup
+   - Query Semantic Scholar API for academic papers
+   - Fall back to LLM extraction from the page content
+2. Citation Formatting: Given metadata, format in any style:
+   - APA 7th: Author, A. A. (Year). Title. Journal, Volume(Issue), Pages.
+   - MLA 9th, Chicago, IEEE, Harvard
+   - BibTeX: @article{key, author={...}, title={...}, ...}
+3. Export Formats:
+   - .bib file (BibTeX, importable by LaTeX, Zotero, Mendeley)
+   - .ris file (importable by EndNote, RefWorks)
+   - .json (CSL-JSON, used by Zotero and Citation.js)
+   - Inline formatted text (copy-paste ready)
+4. In-Report Citations: When generating research reports, automatically
+   insert numbered inline citations [1][2] and append a formatted reference
+   list at the bottom matching the user's preferred citation style.
+5. Citation Deduplication: Detect when multiple sources point to the same
+   paper (e.g., arXiv preprint + published version) and merge them.
+
+Integration: New backend/core/skills/citation_manager.py. New API endpoint
+GET /research/{session_id}/citations?format=bibtex. Frontend gets a
+CitationExportButton on research results and a citation style selector in
+user settings.
+
+
+─────────────────────────────────────────────────────────────────────────────────
+25. DIAGRAM AND ARCHITECTURE AUTO-GENERATOR
+─────────────────────────────────────────────────────────────────────────────────
+
+The Problem: Albot produces text-only outputs. When a user asks "Explain the
+architecture of a transformer", a visual diagram would communicate the concept
+far more effectively than paragraphs of text. Knowledge graph data also has
+no visual export beyond the existing graph visualization.
+
+What to Build: A DiagramGeneratorSkill that produces visual diagrams from
+natural language or structured data:
+1. Mermaid Diagrams: The LLM generates Mermaid.js syntax (flowcharts,
+   sequence diagrams, class diagrams, entity-relationship diagrams, Gantt
+   charts, state diagrams). The frontend renders them using the mermaid
+   library (already a common npm package).
+2. Architecture Diagrams: For system design questions, generate component
+   diagrams showing services, databases, APIs, and data flows.
+3. Concept Maps: From a set of findings or a knowledge graph subgraph,
+   generate a concept map showing entities and relationships as a visual
+   network. Uses D3.js force-directed layout or vis.js.
+4. Comparison Tables: When comparing N items across M dimensions, auto-detect
+   the comparison pattern and generate a structured comparison matrix with
+   color-coded cells (green=advantage, red=disadvantage).
+5. Timeline Diagrams: For historical or chronological queries, generate a
+   visual timeline of events.
+6. Auto-Detection: The system detects when a response would benefit from a
+   diagram (presence of words like "architecture", "flow", "process",
+   "comparison", "timeline", "hierarchy") and appends the diagram
+   automatically.
+7. Export: SVG and PNG download buttons on every generated diagram.
+
+Integration: The LLM response post-processor in the orchestrator detects
+diagram opportunities. Mermaid code blocks are rendered by the frontend
+using mermaid.initialize() and mermaid.render(). New DiagramCard component
+wraps rendered diagrams with export controls.
+
+
+─────────────────────────────────────────────────────────────────────────────────
+26. PROMPT CHAINING AND WORKFLOW AUTOMATION
+─────────────────────────────────────────────────────────────────────────────────
+
+The Problem: Complex tasks require multiple sequential prompts — "Summarize
+this paper, then extract the methodology, then compare it with paper X, then
+write a critique." Users must manually chain these steps, copy-pasting output
+from one query as input to the next.
+
+What to Build: A WorkflowEngine that lets users define reusable multi-step
+LLM pipelines:
+1. Workflow Definition: A YAML/JSON schema defining steps:
+   - name: "Paper Analysis Pipeline"
+   - steps:
+     - {id: "summarize", prompt: "Summarize: {{input}}", output_var: "summary"}
+     - {id: "methods", prompt: "Extract methodology from: {{summary}}",
+        output_var: "methods"}
+     - {id: "critique", prompt: "Critique this methodology: {{methods}}",
+        output_var: "critique"}
+     - {id: "report", prompt: "Write a review combining: {{summary}},
+        {{methods}}, {{critique}}", output_var: "final_report"}
+2. Variable Interpolation: Each step can reference outputs from prior steps
+   via {{variable_name}} syntax.
+3. Conditional Branching: Steps can have conditions:
+   if: "{{summary}}" contains "machine learning" → run ML-specific analysis;
+   else → run general analysis.
+4. Parallel Execution: Independent steps run concurrently via asyncio.gather.
+5. Built-In Templates: Ship with 10+ pre-built workflows:
+   - Paper Review Pipeline
+   - Competitive Analysis Pipeline
+   - Technical Due Diligence Pipeline
+   - Content Repurposing Pipeline (research → blog → social posts → email)
+   - Bug Report Triage Pipeline
+6. Visual Builder: Frontend drag-and-drop workflow editor using
+   react-flow or similar. Nodes represent steps, edges represent data flow.
+7. Workflow Library: Save, share, and fork workflows. Export as JSON.
+
+Integration: New backend/core/skills/workflow_engine.py with WorkflowRunner
+class. New SQLite table: workflows. API endpoints: POST /workflow/create,
+POST /workflow/run, GET /workflow/templates. Frontend gets WorkflowBuilder
+and WorkflowRunnerPanel components.
+
+
+─────────────────────────────────────────────────────────────────────────────────
+27. PII DETECTION AND DATA ANONYMIZATION
+─────────────────────────────────────────────────────────────────────────────────
+
+The Problem: Users may ingest documents containing personally identifiable
+information (PII) — names, emails, phone numbers, addresses, SSNs, credit
+card numbers. This data gets embedded and stored in ArangoDB with no
+redaction, creating privacy and compliance risks (GDPR, HIPAA, CCPA).
+
+What to Build: A PIIGuard layer that runs during ingestion and optionally
+during query responses:
+1. Detection Engine: Use a combination of:
+   - Regex patterns for structured PII (email, phone, SSN, credit card,
+     IP addresses, dates of birth)
+   - Named Entity Recognition (NER) via spaCy or a small transformer model
+     for unstructured PII (person names, organization names, locations)
+   - LLM-based detection for contextual PII ("the patient John Smith, age 42,
+     from 123 Oak Street" — regex alone would miss the address context)
+2. Redaction Modes:
+   - Full redaction: Replace with [REDACTED] or type-specific placeholders
+     ([EMAIL], [PHONE], [NAME])
+   - Pseudonymization: Replace real names with consistent fake names
+     (John Smith → Alex Johnson everywhere in the document) using Faker
+     library. Maintain a reversible mapping stored encrypted.
+   - Hash-based: Replace with a deterministic hash so the same entity always
+     maps to the same token, preserving relationships without revealing
+     identity.
+3. Ingestion Gate: Before any document enters the embedding pipeline, PIIGuard
+   scans it. If PII is detected, the user is notified with a preview of
+   what would be redacted and can choose: redact, pseudonymize, or ingest
+   as-is (with acknowledgment).
+4. Response Guard: Optionally scan LLM responses before returning to the
+   user, preventing the model from surfacing PII that exists in the
+   knowledge base.
+5. Audit Log: All PII detections and redaction decisions are logged for
+   compliance auditing.
+
+Integration: New backend/core/safety/pii_guard.py. Hooks into
+MultimodalProcessor.process_file() as a pre-processing step. New SQLite
+table: pii_audit_log. Frontend gets a PIIWarningModal that appears when
+PII is detected during upload.
+
+
+─────────────────────────────────────────────────────────────────────────────────
+28. AGENTIC TOOL EXECUTOR — CALCULATOR, CODE RUNNER, API CALLER
+─────────────────────────────────────────────────────────────────────────────────
+
+The Problem: The LLM can reason about math, code, and data but cannot
+actually execute anything. When asked "What's 17.3% of 4,829?", it does
+mental math (and sometimes gets it wrong). When asked to run a Python
+snippet, it can only generate code, not execute it.
+
+What to Build: An AgentToolExecutor that gives the LLM access to real tools
+via function calling:
+1. Calculator Tool: Evaluates mathematical expressions with arbitrary
+   precision (using Python's decimal module or sympy). Handles unit
+   conversions (pint library), currency conversions (via free API), date
+   arithmetic ("how many days between March 1 and December 25?").
+2. Code Executor Tool: Runs Python code snippets in a sandboxed environment
+   (RestrictedPython + resource limits: 5s timeout, 50MB memory, no network,
+   no filesystem write). Returns stdout, stderr, and any generated plots.
+3. Web Fetch Tool: Makes HTTP GET requests to user-approved URLs and returns
+   the content. Useful for "What does this API endpoint return?" or "Fetch
+   the latest exchange rate from this URL."
+4. Knowledge Base Query Tool: The LLM can explicitly query its own knowledge
+   base with a refined query, inspect the retrieved chunks, and decide
+   whether to query again with different terms — true agentic retrieval.
+5. File Writer Tool: Generates and saves files (CSV exports, JSON data,
+   code files) to a user-accessible downloads directory.
+6. Tool Selection: The orchestrator uses the LLM's function-calling
+   capability (tool_use for Anthropic, functions for OpenAI) to let the
+   model choose which tools to invoke, with what arguments, in what order.
+   Supports multi-step tool chains (calculate → use result in code → plot).
+
+Integration: New backend/core/skills/tool_executor.py with a ToolRegistry
+class. Each tool is a callable with a JSON Schema description. The
+orchestrator wraps tools into the LLM API call format. Frontend shows
+ToolCallCard components displaying which tools were invoked and their
+results.
+
+
+─────────────────────────────────────────────────────────────────────────────────
+29. SIDE-BY-SIDE COMPARATIVE ANALYSIS ENGINE
+─────────────────────────────────────────────────────────────────────────────────
+
+The Problem: Users frequently need to compare things — two papers, three
+products, five frameworks — but Albot treats comparison queries the same as
+any other query, producing a wall of prose. There is no structured comparison
+output.
+
+What to Build: A ComparisonEngineSkill that detects comparison intent and
+produces structured, visual comparisons:
+1. Intent Detection: Detect queries containing "compare", "vs", "versus",
+   "difference between", "which is better", "pros and cons", or two or more
+   named entities connected by "and" or "or".
+2. Dimension Extraction: The LLM identifies the key comparison dimensions
+   relevant to the entities being compared. E.g., comparing ML frameworks →
+   dimensions: performance, ease of use, community size, documentation,
+   GPU support, deployment options.
+3. Per-Entity Analysis: For each entity, retrieve relevant information from
+   the knowledge base and/or web search (if deep research is enabled).
+   Extract scores or qualitative assessments for each dimension.
+4. Comparison Matrix: Generate a structured comparison table with entities
+   as columns and dimensions as rows. Each cell contains a concise
+   assessment with optional color coding (green/yellow/red or numerical
+   score).
+5. Winner Summary: A brief narrative summarizing which entity is strongest
+   in which areas, with a nuanced "best overall" recommendation that
+   acknowledges trade-offs.
+6. Radar Chart: Generate a radar/spider chart (matplotlib) showing each
+   entity's profile across dimensions. Returned as inline image.
+7. Persistent Comparisons: Save comparisons to a dedicated SQLite table so
+   users can revisit and update them as new information becomes available.
+
+Integration: New backend/core/skills/comparison_engine.py. The orchestrator
+routes comparison-intent queries here. Frontend gets a ComparisonTableCard
+and RadarChartCard component. API endpoint: POST /compare with body
+{entities: [...], context: "..."}.
+
+
+─────────────────────────────────────────────────────────────────────────────────
+30. CONTENT MONITORING AND ALERT SYSTEM
+─────────────────────────────────────────────────────────────────────────────────
+
+The Problem: The knowledge base is static — it only grows when users manually
+ingest documents. There is no way to say "watch arXiv for new papers about
+diffusion models" or "alert me when a competitor publishes a new blog post."
+
+What to Build: A ContentMonitor that continuously watches external sources:
+1. Source Types:
+   - RSS/Atom feeds (arXiv, blog feeds, news sites)
+   - Web pages (detect changes via content hashing)
+   - GitHub repositories (new releases, new issues)
+   - Twitter/X accounts (via API or scraping)
+   - Google Scholar alerts (author or keyword)
+2. Match Rules: Users define rules combining:
+   - Keyword match (any of: "diffusion", "score-based")
+   - Semantic similarity (embedding cosine > 0.7 with a reference query)
+   - Source filter (only from arxiv.org, only from specific authors)
+   - Recency (only content published in the last 7 days)
+3. Actions on Match:
+   - Auto-ingest: Automatically add the matched content to the knowledge base.
+   - Alert: Send an in-app notification, email, or webhook.
+   - Digest: Batch matches and send a daily/weekly summary.
+   - Deep Research: Automatically trigger a deep research session on the
+     matched topic (for high-priority watches).
+4. Deduplication: Content fingerprinting (SimHash) prevents the same content
+   from being ingested or alerted multiple times.
+5. Dashboard: A monitoring dashboard showing all active watches, recent
+   matches, and match history.
+
+Integration: New backend/core/monitoring/content_monitor.py using APScheduler
+for periodic checks and feedparser for RSS. New SQLite tables:
+content_watches, content_matches. Frontend gets MonitoringDashboard component.
+
+
+─────────────────────────────────────────────────────────────────────────────────
+31. BROWSER EXTENSION — CLIP, ANNOTATE, AND INGEST FROM THE WEB
+─────────────────────────────────────────────────────────────────────────────────
+
+The Problem: Ingesting web content requires copying URLs, switching to Albot,
+and pasting them. There is no frictionless way to capture content while
+browsing.
+
+What to Build: A lightweight Chrome/Firefox extension:
+1. Clip to Albot: Right-click on any webpage → "Save to Albot". The extension
+   extracts the page content (using Mozilla Readability.js for article
+   extraction), sends it to POST /ingest/web-clip with the URL, title, and
+   cleaned content. Albot ingests it into the knowledge base.
+2. Highlight and Save: Select text on any page → right-click → "Save
+   highlight to Albot". Saves the selected text with the source URL as a
+   fine-resolution KnowledgeAtom, tagged with the highlight context.
+3. Quick Ask: Select text → right-click → "Ask Albot about this". Opens a
+   small popup with a chat interface pre-populated with the selected text
+   as context. Uses the existing /chat endpoint.
+4. PDF Capture: When viewing a PDF in the browser, a floating "Ingest in
+   Albot" button appears. Click to send the PDF URL to
+   POST /ingest/url for processing.
+5. Sidebar Panel: A persistent sidebar that shows the Albot chat interface
+   alongside any webpage. Users can ask questions about the page they are
+   currently viewing.
+6. Auto-Capture Mode: Optionally, the extension can auto-capture every page
+   the user visits (with domain whitelist/blacklist) for passive knowledge
+   base building.
+
+Integration: Extension source in a new /extension directory. Backend gets a
+new POST /ingest/web-clip endpoint that accepts {url, title, content,
+highlights: [...]}. The extension communicates with the backend via the
+existing API, authenticated with an API key stored in extension settings.
+
+
+─────────────────────────────────────────────────────────────────────────────────
+32. PRESENTATION BUILDER — RESEARCH TO SLIDES
+─────────────────────────────────────────────────────────────────────────────────
+
+The Problem: After a deep research session, users often need to present their
+findings. They manually copy-paste from the research report into PowerPoint.
+There is no automated pipeline from research output to presentation.
+
+What to Build: A PresentationBuilderSkill:
+1. Report-to-Slides: Given a research report (from deep research or a chat
+   response), the LLM decomposes it into slide-sized content blocks:
+   - Title slide (topic, date, context)
+   - Executive summary (3-5 bullet points)
+   - Key finding slides (one per major finding, with supporting data)
+   - Comparison/data slides (tables, charts from findings)
+   - Source/references slide
+   - Q&A / discussion slide
+2. Slide Design: Each slide gets a layout assignment (title, content,
+   two-column, image+text, chart) and the content is fitted to the layout.
+   Uses python-pptx to generate actual .pptx files with clean formatting.
+3. Theme Support: Multiple slide themes (professional dark, light minimal,
+   academic, corporate) with consistent color schemes, fonts, and spacing.
+4. Speaker Notes: Each slide includes auto-generated speaker notes — expanded
+   talking points that the presenter can reference.
+5. Chart Integration: If the research contains numerical comparisons, auto-
+   generate charts (bar, line, pie) embedded directly in slides using
+   python-pptx's chart API.
+6. Iterative Refinement: After generation, the user can say "Make slide 3
+   more concise" or "Add a slide about limitations" and the system
+   regenerates only the affected slides.
+7. Export: .pptx download, Google Slides link (via Google Slides API), and
+   PDF export.
+
+Integration: New backend/core/skills/presentation_builder.py. API endpoint:
+POST /generate/presentation with {source: "research_session_id" | "chat_text",
+theme: "professional", slide_count: "auto" | number}. Frontend gets a
+PresentationPreview component showing slide thumbnails and a download button.
+
+
+─────────────────────────────────────────────────────────────────────────────────
+33. AUDIO RESEARCH DIGEST — PODCAST-STYLE KNOWLEDGE DELIVERY
+─────────────────────────────────────────────────────────────────────────────────
+
+The Problem: Long research reports require dedicated reading time. Users with
+commutes, workouts, or visual fatigue want to consume findings as audio but
+raw TTS of an academic report sounds robotic and hard to follow.
+
+What to Build: A PodcastDigestSkill that transforms research into engaging
+audio content:
+1. Script Rewriting: The LLM rewrites the research report into a
+   conversational podcast-style script. Transforms dense academic prose into
+   natural spoken language with transitions ("Now, here's where it gets
+   interesting..."), simplified explanations, and verbal signposting.
+2. Two-Voice Format: Optionally generate a dialogue between a "host" and an
+   "expert" — the host asks questions and the expert explains. This makes
+   the audio more engaging and easier to follow than a monologue.
+3. TTS Synthesis: Use multi-voice TTS (different voices for host vs expert).
+   Edge-tts provides 300+ voices across languages with different styles
+   (narration, conversational, newscast).
+4. Chapter Markers: Generate chapter metadata so the audio player can
+   show sections (Introduction, Key Finding 1, Methodology, etc.) with
+   skip-to navigation.
+5. Background Music: Optionally overlay royalty-free ambient music at low
+   volume (from a small bundled library) for a polished podcast feel.
+6. RSS Feed: Generate a personal podcast RSS feed that any podcast app
+   (Apple Podcasts, Spotify via Anchor) can subscribe to. New research
+   digests automatically appear as new episodes.
+
+Integration: New backend/core/skills/podcast_digest.py. Uses edge-tts or
+OpenAI TTS for synthesis, pydub for audio processing and mixing. API
+endpoint: POST /generate/podcast with {source: "research_session_id",
+format: "monologue" | "dialogue", voice_style: "conversational"}. Frontend
+gets an AudioPlayerCard with chapter navigation.
+
+
+─────────────────────────────────────────────────────────────────────────────────
+34. LLM COST DASHBOARD AND BUDGET MANAGEMENT
+─────────────────────────────────────────────────────────────────────────────────
+
+The Problem: The LLM router transparently calls multiple providers (Groq,
+OpenAI, Anthropic, Gemini, OpenRouter) with fallback chains, but there is
+zero visibility into costs. A heavy deep research session might cost $2 or
+$0.02 depending on which models were used and how many tokens were consumed.
+Users have no way to set budgets or track spending.
+
+What to Build: A CostTracker integrated into LLMRouter:
+1. Token Counting: After every LLM call (complete and async_complete), log:
+   provider, model, input_tokens, output_tokens, timestamp, caller
+   (chat/research/ingestion/judge), session_id.
+2. Cost Calculation: Maintain a price table for each provider/model
+   (e.g., GPT-4o: $2.50/$10.00 per 1M input/output tokens; Claude Sonnet:
+   $3/$15; Groq Llama: free). Calculate cost per call.
+3. Session Cost Rollup: Aggregate costs per chat session, per deep research
+   session, per day, per week, per month. Store in SQLite.
+4. Budget Limits: Users can set:
+   - Per-session budget: "Stop research if cost exceeds $1.00"
+   - Daily budget: "Cap all LLM usage at $5.00/day"
+   - Monthly budget: "Alert me at $50, hard stop at $100"
+   When a limit is hit, the system gracefully stops (early synthesis for
+   research, a warning message for chat) rather than silently failing.
+5. Cost Optimization Suggestions: The dashboard shows which operations are
+   most expensive and suggests optimizations: "Deep research accounts for
+   83% of your spend. Consider reducing max_sources from 40 to 25."
+6. Provider Comparison: Show cost-per-quality metrics by comparing LLM
+   judge scores against cost per session, helping users choose optimal
+   provider configurations.
+
+Integration: CostTracker class added to backend/core/llm/cost_tracker.py.
+LLMRouter.complete() and async_complete() call tracker.log() after each
+invocation. New API endpoint: GET /analytics/costs?period=weekly. Frontend
+gets a CostDashboardPage with charts (daily spend line chart, provider
+breakdown pie chart, top-sessions bar chart).
+
+
+─────────────────────────────────────────────────────────────────────────────────
+35. PLUGIN AND EXTENSION FRAMEWORK
+─────────────────────────────────────────────────────────────────────────────────
+
+The Problem: Every new capability requires modifying core backend code. There
+is no way for users or third-party developers to add custom skills, data
+sources, or output formats without forking the entire codebase.
+
+What to Build: A PluginFramework that allows modular capability extension:
+1. Plugin Interface: A base class AlbotPlugin with lifecycle hooks:
+   - on_install(): Run setup (create tables, download models)
+   - on_query(query, context) -> Optional[Response]: Intercept queries
+     if the plugin can handle them (return None to pass through)
+   - on_ingest(document) -> Optional[List[KnowledgeAtom]]: Custom
+     ingestion for new file types
+   - on_post_process(response) -> Response: Modify responses before
+     delivery (add citations, translate, redact)
+   - get_tools() -> List[ToolDefinition]: Register tools for the
+     agentic executor
+2. Plugin Manifest: Each plugin is a directory with a plugin.yaml:
+   name, version, description, author, dependencies, permissions
+   (which APIs it can access, whether it needs network, filesystem).
+3. Plugin Manager: Install plugins from a local directory, a git repo URL,
+   or a future plugin registry. Handles dependency resolution, version
+   conflicts, and sandboxing.
+4. Permission System: Plugins declare required permissions. Users approve
+   permissions on install. Plugins cannot access APIs they were not granted.
+5. Plugin SDK: A lightweight Python package (albot-plugin-sdk) that provides
+   the base classes, type definitions, and testing utilities for plugin
+   developers.
+6. Hot Reload: Plugins can be installed, updated, and uninstalled without
+   restarting the server.
+
+Integration: New backend/core/plugins/ module with plugin_manager.py,
+plugin_base.py, plugin_registry.py. The orchestrator's query routing checks
+registered plugins before falling back to built-in skills. Frontend gets a
+PluginManagerPage showing installed plugins with enable/disable toggles.
+
+
+─────────────────────────────────────────────────────────────────────────────────
+36. PERSONA AND ROLE-BASED AGENT PROFILES
+─────────────────────────────────────────────────────────────────────────────────
+
+The Problem: Albot has a single personality and communication style. A PhD
+student, a startup CEO, and a high school teacher all get the same tone,
+vocabulary level, and response structure.
+
+What to Build: A PersonaSystem that lets users select or create AI agent
+profiles:
+1. Built-In Personas:
+   - Research Assistant: Formal, thorough, citation-heavy, academic tone
+   - Technical Advisor: Concise, code-heavy, assumes expertise
+   - Explainer: Simple language, analogies, step-by-step, ELI5-friendly
+   - Executive Briefer: Business language, bottom-line-up-front, action items
+   - Socratic Tutor: Answers questions with questions, guides discovery
+   - Creative Writer: Narrative style, vivid language, storytelling
+   - Devil's Advocate: Challenges assumptions, presents counterarguments
+2. Custom Personas: Users create their own with:
+   - Name and avatar
+   - System prompt template
+   - Preferred response length (concise / standard / detailed)
+   - Vocabulary level (simplified / standard / technical / academic)
+   - Interaction style (directive / collaborative / socratic)
+   - Knowledge base scope (all / specific namespaces / specific documents)
+3. Persona Memory: Each persona maintains its own conversation style
+   preferences, learned from user feedback ("too verbose" → adjusts down).
+4. Multi-Persona Chat: In a single session, switch between personas for
+   different perspectives. E.g., ask the Research Assistant to analyze, then
+   switch to Devil's Advocate for critique.
+5. Persona Templates: Export/import persona configs as JSON for sharing.
+
+Integration: New backend/core/skills/persona_system.py. Persona configs
+stored in SQLite personas table. The orchestrator prepends the active
+persona's system prompt to every LLM call. Frontend gets a PersonaSelector
+component in the chat header and a PersonaEditorModal.
+
+
+─────────────────────────────────────────────────────────────────────────────────
+37. ANNOTATION AND HIGHLIGHTING LAYER FOR INGESTED DOCUMENTS
+─────────────────────────────────────────────────────────────────────────────────
+
+The Problem: Once a document is ingested, users cannot interact with it
+visually. There is no way to highlight a paragraph in an ingested PDF and say
+"explain this" or "this is important, remember it." The document becomes an
+opaque bag of embeddings.
+
+What to Build: An AnnotationSystem:
+1. Document Viewer: A built-in document viewer (PDF.js for PDFs, custom
+   renderer for DOCX/text) that displays the original document in the
+   frontend.
+2. Inline Highlighting: Users can select text spans and apply color-coded
+   highlights (yellow=important, red=question, green=agree, blue=reference).
+3. Annotations: Each highlight can have an attached note (free text or
+   structured tags).
+4. Ask About Highlight: A "Ask Albot" button on each highlight sends the
+   highlighted text as context to the chat, pre-populated with: "Explain
+   this passage: [highlighted text]" or "What does this mean in the context
+   of [document title]?"
+5. Importance Boosting: Highlighted passages get their embedding importance
+   score boosted in the vector store, making them more likely to be
+   retrieved in future queries. Yellow highlights boost by 1.5x, multiple
+   highlights on the same passage stack.
+6. Annotation Search: A search interface across all annotations —
+   "Show me everything I highlighted about attention mechanisms."
+7. Annotation Export: Export all annotations for a document as a structured
+   document (markdown, JSON, or a separate annotated PDF with highlights
+   rendered).
+
+Integration: Frontend gets a DocumentViewer component using react-pdf (for
+PDF) and a custom AnnotationOverlay. Backend gets new SQLite tables:
+annotations, highlights. API endpoints: POST /annotations/create,
+GET /annotations/search, GET /documents/{id}/view. The retrieval engine
+reads highlight boost scores during query time.
+
+
+─────────────────────────────────────────────────────────────────────────────────
+38. AUTOMATED MEETING NOTES — TRANSCRIBE, SUMMARIZE, ACTION ITEMS
+─────────────────────────────────────────────────────────────────────────────────
+
+The Problem: Users already upload audio files for transcription via Whisper,
+but the output is a raw transcript. There is no structured meeting intelligence
+— no summary, no action items, no speaker identification, no topic
+segmentation.
+
+What to Build: A MeetingAssistantSkill that transforms audio/video recordings
+into structured meeting intelligence:
+1. Enhanced Transcription: Use Whisper with word-level timestamps. For longer
+   recordings (>30 min), process in segments with overlap to avoid boundary
+   artifacts.
+2. Speaker Diarization: Use pyannote.audio (open-source, HuggingFace) to
+   identify different speakers. Label the transcript as Speaker 1, Speaker 2,
+   etc. Users can assign names to speakers post-hoc.
+3. Topic Segmentation: The LLM splits the transcript into topic sections
+   with titles: "Budget Discussion (0:00-12:30)", "Q3 Roadmap Review
+   (12:30-25:00)", "Open Issues (25:00-31:45)".
+4. Meeting Summary: A structured summary with:
+   - Key decisions made
+   - Action items (who, what, deadline) extracted as structured objects
+   - Questions raised but not resolved
+   - Key quotes with timestamps
+5. Action Item Tracker: Extracted action items are stored in SQLite and
+   surfaced in a dedicated "Action Items" panel. Users can mark items as
+   complete, reassign, or set reminders.
+6. Meeting Knowledge: Important decisions and facts from meetings are
+   auto-ingested into the knowledge base as MemoryFragments with
+   namespace="meetings", so future queries can reference past meeting
+   decisions: "What did we decide about the API migration?"
+7. Follow-Up Generation: After processing, the LLM generates a follow-up
+   email draft summarizing the meeting and listing action items, ready to
+   send.
+
+Integration: New backend/core/skills/meeting_assistant.py. Uses existing
+Whisper model. Adds pyannote.audio for diarization. New SQLite tables:
+meetings, action_items. Frontend gets MeetingPanel with topic timeline,
+speaker labels, and action item checklist.
+
+
+─────────────────────────────────────────────────────────────────────────────────
+39. SEMANTIC CLIPBOARD — CROSS-APPLICATION KNOWLEDGE BRIDGE
+─────────────────────────────────────────────────────────────────────────────────
+
+The Problem: Knowledge stays trapped inside Albot. When a user is writing in
+Google Docs, composing an email, or filling out a form, they have to
+context-switch to Albot, query, copy the answer, and paste it back. The
+knowledge base is not accessible where users actually work.
+
+What to Build: A SemanticClipboard system tray application:
+1. Global Hotkey: Press Ctrl+Shift+A (configurable) from any application.
+   A small floating window appears with a search bar.
+2. Instant Query: Type a question → Albot queries its knowledge base and
+   returns a concise answer (max 200 words) in the floating window.
+3. Copy to Clipboard: One-click copies the answer. Or press Enter to
+   auto-paste into the active application.
+4. Context Awareness: If text is selected in any application when the hotkey
+   is pressed, that text is automatically included as context:
+   "Selected: [contract clause] → Ask: What are the risks in this clause?"
+5. Quick Actions:
+   - Summarize: Select a block of text → Ctrl+Shift+S → get a summary
+   - Translate: Select text → Ctrl+Shift+T → get translation
+   - Define: Select a term → Ctrl+Shift+D → get definition from KB
+6. History: The clipboard maintains a history of the last 50 queries and
+   answers, searchable and re-copyable.
+7. Implementation: Built as an Electron app or a Python tray application
+   (using pystray + tkinter for the floating window). Communicates with
+   the Albot backend via the existing REST API.
+
+Integration: New /desktop-app directory with the tray application source.
+Reuses all existing API endpoints. The backend gets a
+GET /quick-query?q=...&context=... endpoint optimized for low-latency
+responses (skips web search, uses top-3 retrieval only, max_tokens=300).
+
+
+─────────────────────────────────────────────────────────────────────────────────
+40. KNOWLEDGE BASE HEALTH DASHBOARD AND AUTO-MAINTENANCE
+─────────────────────────────────────────────────────────────────────────────────
+
+The Problem: As the knowledge base grows (hundreds of documents, thousands of
+chunks), quality degrades silently. Stale content, duplicate embeddings,
+orphaned nodes, and embedding drift accumulate without any visibility.
+
+What to Build: A KBHealthDashboard:
+1. Health Metrics (computed daily or on-demand):
+   - Total documents, chunks, embeddings, graph nodes, graph edges
+   - Duplicate detection: Clusters of near-duplicate chunks (cosine > 0.95)
+   - Orphan detection: Graph nodes with zero edges (isolated knowledge)
+   - Staleness score: Documents older than N months with no queries hitting
+     them (zero retrieval hits in the access log)
+   - Embedding coverage: Percentage of chunks that have valid embeddings
+     (detect corrupted or missing vectors)
+   - Namespace balance: Distribution of content across namespaces
+2. Auto-Maintenance Tasks:
+   - Deduplicate: Merge near-duplicate chunks, keeping the one with higher
+     importance and more graph connections
+   - Re-embed: Re-generate embeddings for chunks whose embeddings are from
+     an older model version (model upgrade detection)
+   - Prune: Flag stale, never-retrieved content for user review and optional
+     deletion
+   - Re-index: Rebuild ArangoDB indexes when fragmentation exceeds threshold
+   - Graph Repair: Connect orphaned nodes to their nearest semantic neighbors
+3. Quality Score: A single 0-100 "Knowledge Base Health Score" combining all
+   metrics, displayed prominently on the dashboard.
+4. Scheduled Maintenance: Auto-run maintenance tasks weekly via APScheduler,
+   with a summary notification of what was cleaned.
+
+Integration: New backend/core/maintenance/kb_health.py. API endpoint:
+GET /analytics/kb-health. Frontend gets a KBHealthDashboard page with
+metric cards, trend charts, and one-click maintenance action buttons.
+
+
+─────────────────────────────────────────────────────────────────────────────────
+41. INTERACTIVE TUTORIAL AND ONBOARDING SYSTEM
+─────────────────────────────────────────────────────────────────────────────────
+
+The Problem: Albot has many powerful features (RAG, deep research, knowledge
+graph, web search, LLM judge, memory) but no guided onboarding. New users
+face a blank chat and have no idea what the system can do or how to use it
+effectively.
+
+What to Build: An OnboardingSystem:
+1. First-Run Tutorial: On first visit, a step-by-step guided tour highlights
+   each UI element: chat input, file upload, deep research button, knowledge
+   graph panel, settings. Uses a spotlight/tooltip overlay (react-joyride or
+   similar).
+2. Interactive Demos: Pre-built demo scenarios that walk users through:
+   - "Upload your first document" (provides a sample PDF)
+   - "Ask your first question" (suggests a query about the sample doc)
+   - "Run your first deep research" (pre-filled topic)
+   - "Explore the knowledge graph" (highlights the visualization)
+3. Skill Discovery: A "/help" command or "What can you do?" query triggers
+   a structured capability card showing all available skills with examples:
+   "I can: analyze data, generate documents, run deep research, create
+   quizzes, review code..."
+4. Contextual Tips: Smart tips that appear based on user behavior:
+   - User types a very long query → tip: "Try Deep Research for complex
+     topics"
+   - User uploads a CSV → tip: "Ask me to analyze this data or plot charts"
+   - User asks a comparison question → tip: "I can generate comparison
+     tables — try asking 'compare X vs Y'"
+5. Sample Knowledge Base: Ship with a pre-built demo knowledge base
+   (10-15 curated documents on AI/ML) so users can immediately experience
+   RAG without uploading anything.
+
+Integration: Frontend gets OnboardingOverlay, TutorialStep, and
+ContextualTip components. Backend gets GET /onboarding/status and
+POST /onboarding/complete endpoints. User onboarding state stored in
+localStorage and SQLite.
+
+
+─────────────────────────────────────────────────────────────────────────────────
+42. EXPORT AND BACKUP SYSTEM — FULL KNOWLEDGE PORTABILITY
+─────────────────────────────────────────────────────────────────────────────────
+
+The Problem: All knowledge, chat history, research sessions, and memory are
+locked inside Albot's databases (ArangoDB + SQLite). There is no export,
+backup, or migration path. If the databases are corrupted or the user wants
+to migrate to a different machine, everything is lost.
+
+What to Build: A comprehensive ExportAndBackupSystem:
+1. Full Backup: A single-click backup that exports:
+   - All ArangoDB collections (knowledge atoms, graph edges, embeddings)
+     as JSON dumps
+   - SQLite database file (chat history, research sessions, memory)
+   - Uploaded source files from data/uploads/
+   - Configuration files (.env settings, research configs)
+   - Packaged as a single .albotbackup.zip file with a manifest.json
+     describing contents and version
+2. Selective Export:
+   - Export a single chat session as Markdown or JSON
+   - Export a research session as PDF (formatted report + sources + metadata)
+   - Export the knowledge graph as GraphML, GEXF, or JSON (importable by
+     Gephi, Neo4j, NetworkX)
+   - Export all documents from a namespace as a zip
+3. Import/Restore: Upload a .albotbackup.zip to restore everything. Handles
+   version migration (if the backup is from an older schema version, run
+   migrations automatically).
+4. Incremental Backup: After the initial full backup, only export changes
+   (new documents, new chats, new research) — dramatically faster for large
+   knowledge bases.
+5. Cloud Sync: Optional sync to cloud storage (S3, Google Drive, or a
+   user's own server) with encryption at rest (AES-256).
+6. Scheduled Backups: Auto-backup daily/weekly to a configured directory,
+   with retention policy (keep last N backups).
+
+Integration: New backend/core/maintenance/backup_manager.py. API endpoints:
+POST /backup/create, GET /backup/download/{id}, POST /backup/restore,
+GET /backup/history. Frontend gets a BackupManagerPage with backup history
+table, one-click backup button, and restore upload zone.
+
+
+─────────────────────────────────────────────────────────────────────────────────
+43. REAL-TIME COLLABORATION CHAT — CO-RESEARCH WITH LIVE CURSORS
+─────────────────────────────────────────────────────────────────────────────────
+
+The Problem: Even with shared workspaces (Feature #23), users cannot
+collaborate in real-time on the same chat session. There is no co-browsing,
+no shared cursor, no simultaneous querying.
+
+What to Build: A RealTimeCollaboration layer using WebSockets:
+1. Shared Chat Sessions: Multiple users can join the same chat session
+   simultaneously. All messages (from any user and from Albot) appear in
+   real-time for everyone.
+2. Presence Indicators: Show who is currently viewing the chat session
+   (avatars/names in the header), with typing indicators when someone is
+   composing a message.
+3. Shared Research: When one user starts a deep research session, all
+   participants see the live progress panel. Any participant can click
+   "Stop Research."
+4. Message Attribution: Each message shows which user sent it (name + avatar),
+   distinguishing between team members' queries and Albot's responses.
+5. Shared Annotations: Users can react to messages (thumbs up/down, star,
+   flag) and add threaded comments on specific responses.
+6. Conflict Resolution: If two users submit queries simultaneously, they are
+   queued and processed sequentially. Both users see both queries and both
+   responses.
+7. WebSocket Architecture: FastAPI WebSocket endpoint at /ws/chat/{chat_id}.
+   Uses a pub/sub pattern — messages are broadcast to all connected clients.
+   Falls back to SSE polling for clients that don't support WebSockets.
+
+Integration: New backend/core/collaboration/realtime_manager.py with
+WebSocket connection manager. Frontend replaces HTTP polling with WebSocket
+connection for chat updates. New components: PresenceIndicator, UserAvatar,
+MessageAttribution, ThreadedComments.
+
+
+─────────────────────────────────────────────────────────────────────────────────
+44. EMAIL AND COMMUNICATION INTEGRATION
+─────────────────────────────────────────────────────────────────────────────────
+
+The Problem: Albot generates excellent content — research reports, summaries,
+analyses — but users must manually copy-paste into emails, Slack, or other
+communication channels. There is no direct send capability.
+
+What to Build: A CommunicationHub that bridges Albot to external channels:
+1. Email Integration:
+   - Connect via SMTP credentials or OAuth (Gmail, Outlook).
+   - After any response, a "Send as Email" button lets users select
+     recipients, edit subject/body, and send directly.
+   - Email drafting skill: "Draft an email to the team summarizing our
+     research on X" → generates a properly formatted email with greeting,
+     body, sign-off, and the research summary inlined.
+   - Inbox monitoring: Optionally watch an inbox for emails matching
+     keywords and auto-generate draft responses using the knowledge base.
+2. Slack Integration:
+   - Connect via Slack Bot Token (OAuth).
+   - Post research reports or chat responses directly to a Slack channel.
+   - Slash command in Slack: /albot "question" → queries Albot and returns
+     the answer in-channel.
+   - Thread monitoring: Watch specific Slack channels and alert when
+     discussions match topics in the knowledge base.
+3. Webhook Output:
+   - Generic webhook integration: POST any response to a user-configured
+     URL with customizable payload format.
+   - Useful for integration with Zapier, Make, n8n, or custom dashboards.
+
+Integration: New backend/core/integrations/communication_hub.py. OAuth flow
+for Gmail/Slack. New SQLite tables: email_accounts, slack_connections,
+webhooks. Frontend gets CommunicationSettings page and ShareButton component
+on each message/response.
+
+
+─────────────────────────────────────────────────────────────────────────────────
+45. INTELLIGENT CHUNKING STRATEGIES — ADAPTIVE DOCUMENT DECOMPOSITION
+─────────────────────────────────────────────────────────────────────────────────
+
+The Problem: The multimodal processor uses naive sentence-splitting for text
+and fixed-size chunking for other formats. A 50-page legal contract and a
+2-page blog post both get the same treatment. This produces either too-small
+chunks that lose context or too-large chunks that dilute relevance.
+
+What to Build: An AdaptiveChunker that selects the optimal chunking strategy
+per document:
+1. Document Classification: Before chunking, classify the document type
+   (academic paper, legal contract, technical docs, narrative text, code,
+   Q&A/FAQ, tabular data) using a fast LLM call or rule-based heuristics.
+2. Strategy Selection:
+   - Academic papers: Section-aware chunking using heading detection.
+     Abstract, Introduction, Methods, Results, Discussion become separate
+     chunks. References are extracted and linked, not chunked.
+   - Legal contracts: Clause-level chunking. Each numbered clause/sub-clause
+     becomes a chunk. Cross-references between clauses create graph edges.
+   - Technical documentation: Topic-based chunking using heading hierarchy.
+     Code blocks are kept intact within their parent chunk.
+   - Narrative text: Sliding window with semantic boundary detection —
+     split at paragraph breaks where topic changes (detected by embedding
+     distance between consecutive paragraphs exceeding threshold).
+   - Q&A/FAQ: Each question-answer pair becomes a single chunk.
+   - Tabular data: Row-group chunking (keep related rows together based
+     on a key column).
+3. Chunk Size Optimization: Target chunk sizes based on the embedding
+   model's optimal input length. For E5-Large: 256-512 tokens. Chunks
+   below 50 tokens are merged with neighbors. Chunks above 1024 tokens
+   are split at the nearest sentence boundary.
+4. Overlap Windows: Configurable overlap (default 10%) between adjacent
+   chunks to prevent information loss at boundaries.
+5. Chunk Quality Score: After embedding, compute a "chunk coherence score"
+   (intra-chunk cosine similarity). Flag low-coherence chunks for
+   re-splitting.
+
+Integration: Replace the current process_text_file() logic in
+MultimodalProcessor with a call to AdaptiveChunker.chunk(content, doc_type).
+New backend/core/ingestion/adaptive_chunker.py. The document classifier is
+a lightweight wrapper around the LLM with a cached classification prompt.
+
+
+─────────────────────────────────────────────────────────────────────────────────
+46. RESPONSE VERSIONING AND A/B COMPARISON
+─────────────────────────────────────────────────────────────────────────────────
+
+The Problem: When a user asks the same question at different times, they get
+different answers (due to knowledge base changes, model updates, or
+temperature). There is no way to compare response versions or understand
+why the answer changed.
+
+What to Build: A ResponseVersioning system:
+1. Response Fingerprinting: Each response is hashed (content + sources used +
+   model used) and stored with its full generation context.
+2. Query Re-Run: A "Re-ask" button on any past response re-runs the same
+   query with the current knowledge base state. The new response is shown
+   side-by-side with the original, with diff highlighting.
+3. A/B Model Comparison: A "Compare Models" mode where the same query is
+   sent to two different LLM providers simultaneously. Both responses appear
+   side-by-side with the LLM Judge scoring both. Helps users find their
+   optimal model configuration.
+4. Response History: For each unique query (normalized), keep a version
+   history of all responses, timestamps, and which knowledge base state
+   produced each one. A timeline view shows how the answer evolved.
+5. Regression Detection: Automated detection when a re-asked query gets a
+   significantly worse LLM Judge score than previously — indicates knowledge
+   base degradation or model regression.
+6. Source Attribution Diff: Show which sources were used in each version.
+   Highlight newly added sources and removed sources.
+
+Integration: New backend/core/analytics/response_versioning.py. New SQLite
+table: response_versions. Frontend gets ResponseDiffViewer and
+ModelComparisonPanel components. API endpoints: POST /compare/models,
+GET /responses/{query_hash}/versions.
+
+
+─────────────────────────────────────────────────────────────────────────────────
+47. COMMAND PALETTE AND POWER USER INTERFACE
+─────────────────────────────────────────────────────────────────────────────────
+
+The Problem: Power users want keyboard-driven workflows, quick access to
+features, and shortcuts. Currently everything requires mouse navigation
+through the UI.
+
+What to Build: A CommandPalette (Ctrl+K / Cmd+K):
+1. Universal Search: Search across everything from a single input —
+   past chats, research sessions, documents, knowledge base entries,
+   settings, and available commands.
+2. Quick Commands:
+   - "/research [topic]" — start deep research
+   - "/ingest [url]" — ingest a URL
+   - "/compare [a] vs [b]" — start comparison
+   - "/quiz [topic]" — generate quiz
+   - "/export [format]" — export current chat/research
+   - "/persona [name]" — switch persona
+   - "/mode [domain]" — switch domain mode
+3. Keyboard Shortcuts:
+   - Ctrl+Enter: Send message
+   - Ctrl+Shift+R: Start deep research
+   - Ctrl+Shift+U: Upload file
+   - Ctrl+Shift+G: Toggle knowledge graph
+   - Ctrl+Shift+N: New chat
+   - Esc: Close any modal/panel
+4. Fuzzy Matching: Commands and search results use fuzzy matching (fuse.js)
+   so users don't need exact command names.
+5. Recent Actions: The palette shows recently used commands and frequently
+   accessed features at the top.
+6. Customizable Shortcuts: Users can rebind any keyboard shortcut via a
+   settings page.
+
+Integration: Frontend gets a CommandPalette component (similar to VS Code's
+Ctrl+Shift+P). Uses cmdk library or custom implementation. All existing
+features register themselves in a command registry. Settings page gets a
+KeyboardShortcuts section.
+
+
+─────────────────────────────────────────────────────────────────────────────────
+48. RETRIEVAL CONFIDENCE SCORING AND ANSWER CALIBRATION
+─────────────────────────────────────────────────────────────────────────────────
+
+The Problem: Albot answers every question with equal confidence, whether it
+has 10 highly relevant sources or zero. Users cannot tell if the answer is
+well-supported or hallucinated. The system gives no signal of its own
+uncertainty.
+
+What to Build: A ConfidenceCalibration system:
+1. Retrieval Confidence: After retrieval, compute a confidence score based on:
+   - Top-K retrieval scores (are the top results highly similar or barely
+     matching?)
+   - Score gap between top-1 and top-5 (large gap = clear best match;
+     small gap = ambiguous)
+   - Number of sources that independently support the same claim
+   - Knowledge base coverage (is the query topic well-represented in the KB?)
+2. Answer Confidence: After LLM generation, run a self-consistency check:
+   - Generate 3 responses at temperature=0.7
+   - Compute semantic similarity between all 3
+   - High similarity = high confidence (the model converges on the same
+     answer regardless of sampling)
+   - Low similarity = low confidence (the answer is unstable)
+3. Confidence Display: Show a confidence indicator next to each response:
+   - High (green): Well-supported by multiple sources, consistent answers
+   - Medium (yellow): Some support, but gaps or ambiguity detected
+   - Low (red): Weak retrieval, inconsistent answers, or out-of-domain query
+4. Calibrated Caveats: When confidence is medium or low, the system
+   automatically prepends a caveat: "Note: This answer is based on limited
+   sources and may not be fully accurate." or "I'm not confident about this
+   — consider verifying with additional sources."
+5. Confidence Analytics: Track confidence distributions over time. Identify
+   topic areas where confidence is consistently low (knowledge base gaps).
+6. Abstention: When confidence is critically low (below threshold), instead
+   of hallucinating, the system says: "I don't have enough information to
+   answer this reliably. Consider running a deep research session or
+   ingesting relevant documents."
+
+Integration: New backend/core/retrieval/confidence_scorer.py. Called after
+retrieval and after LLM generation. The ConfidenceScore is attached to the
+response object and rendered in the frontend as a ConfidenceBadge component.
+
+
 ─────────────────────────────────────────────────────────────────────────────────
 END OF FUTURE SCOPE DOCUMENT
 ─────────────────────────────────────────────────────────────────────────────────

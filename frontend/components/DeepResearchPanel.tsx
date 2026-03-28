@@ -292,6 +292,7 @@ export default function DeepResearchPanel({
       case 'planning': return 'Generating Research Plan';
       case 'researching': return 'Researching';
       case 'synthesizing': return 'Synthesizing Report';
+      case 'stopping': return 'Stopping — Synthesizing Partial Findings';
       case 'complete': return 'Research Complete';
       case 'cancelled': return 'Research Stopped';
       case 'error': return 'Error';
@@ -304,6 +305,7 @@ export default function DeepResearchPanel({
       case 'planning': return '#a78bfa';
       case 'researching': return '#60a5fa';
       case 'synthesizing': return '#f59e0b';
+      case 'stopping': return '#fb923c';
       case 'complete': return '#34d399';
       case 'cancelled': return '#fb923c';
       case 'error': return '#f87171';
@@ -321,6 +323,7 @@ export default function DeepResearchPanel({
   };
 
   const isActive = !['complete', 'cancelled', 'error'].includes(status);
+  const isStopped = status === 'stopping' || isStopping;
 
   // ─────────────────────────────────────────────────
   // Render
@@ -586,26 +589,26 @@ export default function DeepResearchPanel({
         <div style={{ display: 'flex', justifyContent: 'center' }}>
           <button
             onClick={handleStop}
-            disabled={isStopping}
+            disabled={isStopped}
             style={{
               display: 'flex',
               alignItems: 'center',
               gap: '8px',
               padding: '10px 24px',
-              background: isStopping
+              background: isStopped
                 ? 'rgba(148, 163, 184, 0.1)'
                 : 'rgba(239, 68, 68, 0.12)',
-              border: `1px solid ${isStopping ? 'rgba(148, 163, 184, 0.2)' : 'rgba(239, 68, 68, 0.3)'}`,
+              border: `1px solid ${isStopped ? 'rgba(148, 163, 184, 0.2)' : 'rgba(239, 68, 68, 0.3)'}`,
               borderRadius: '10px',
-              color: isStopping ? '#94a3b8' : '#fca5a5',
-              cursor: isStopping ? 'not-allowed' : 'pointer',
+              color: isStopped ? '#94a3b8' : '#fca5a5',
+              cursor: isStopped ? 'not-allowed' : 'pointer',
               fontSize: '13px',
               fontWeight: 500,
               transition: 'all 0.2s',
             }}
           >
             <Square size={14} />
-            {isStopping ? 'Stopping...' : 'Stop Research'}
+            {isStopped ? 'Stopping...' : 'Stop Research'}
           </button>
         </div>
       )}
