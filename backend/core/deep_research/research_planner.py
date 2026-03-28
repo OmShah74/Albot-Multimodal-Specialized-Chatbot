@@ -104,7 +104,7 @@ Requirements:
 - Each step should explore a distinct facet of the topic with surgical precision"""
 
         try:
-            response = self.llm.complete(
+            response = await self.llm.async_complete(
                 messages=[{"role": "user", "content": user_prompt}],
                 system_prompt=system_prompt,
                 max_tokens=4500,
@@ -122,6 +122,12 @@ Requirements:
                 # Sanitize queries: strip any site: operators that slipped through
                 raw_queries = step_data.get("search_queries", [query])
                 clean_queries = [self._sanitize_query(q) for q in raw_queries]
+                
+                # Anchor enforcement: ensure each query contains at least one
+                # core term from the original research query to prevent drift.
+                # This stops "Johnson Lindenstrauss" from drifting to "Johnson & Johnson"
+                clean_queries = self._enforce_query_anchors(clean_queries, query)
+                
                 steps.append(ResearchStepDef(
                     step_index=i,
                     title=step_data.get("title", f"Research Step {i+1}"),
@@ -176,7 +182,7 @@ Findings so far:
 Generate targeted follow-up search queries (plain natural language only, no site: operators):"""
 
         try:
-            response = self.llm.complete(
+            response = await self.llm.async_complete(
                 messages=[{"role": "user", "content": user_prompt}],
                 system_prompt=system_prompt,
                 max_tokens=500,
@@ -225,7 +231,7 @@ Summary of findings:
 Is the research sufficient for a 3000+ word expert report? (yes/no)"""
 
         try:
-            response = self.llm.complete(
+            response = await self.llm.async_complete(
                 messages=[{"role": "user", "content": user_prompt}],
                 system_prompt=system_prompt,
                 max_tokens=10,
@@ -293,6 +299,60 @@ Is the research sufficient for a 3000+ word expert report? (yes/no)"""
             logger.debug(f"[ResearchPlanner] Sanitized query: '{original}' -> '{result}'")
 
         return result if result else original
+
+    def _enforce_query_anchors(self, queries: List[str], original_query: str) -> List[str]:
+        """
+        Ensure each search query contains at least one distinctive term from the
+        original research query to prevent semantic drift.
+
+        Problem this solves:
+        - Query: "Johnson Lindenstrauss algorithm approach paper"
+        - LLM generates sub-query: "using JL for k-means clustering benchmark 2023"
+        - Search engine matches "JL" to nothing useful, returns jnj.com, lichess.org
+        - Fix: prepend "Johnson Lindenstrauss" to anchor the sub-query
+
+        Strategy:
+        - Extract distinctive terms (4+ chars, not generic research words)
+        - If a sub-query contains NONE of these terms, prepend the shortest
+          distinctive anchor phrase
+        """
+        import re
+
+        # Generic research words that don't anchor a topic
+        generic_words = {
+            "paper", "survey", "tutorial", "benchmark", "arxiv", "research",
+            "algorithm", "approach", "method", "model", "results", "recent",
+            "latest", "implementation", "evaluation", "analysis", "review",
+            "study", "overview", "introduction", "techniques", "applications",
+            "performance", "comparison", "advances", "future", "open",
+            "problems", "challenges", "directions", "framework", "system",
+            "design", "using", "based", "novel", "state", "guide",
+        }
+
+        # Extract distinctive anchor terms from the original query
+        query_words = re.findall(r'[A-Za-z]{4,}', original_query)
+        anchor_terms = [w for w in query_words if w.lower() not in generic_words]
+
+        if not anchor_terms:
+            return queries  # No distinctive terms to anchor with
+
+        # Build a short anchor phrase from the first 2-3 distinctive terms
+        anchor_phrase = " ".join(anchor_terms[:3])
+
+        anchored_queries = []
+        for q in queries:
+            q_lower = q.lower()
+            # Check if any anchor term is already present
+            has_anchor = any(term.lower() in q_lower for term in anchor_terms)
+            if has_anchor:
+                anchored_queries.append(q)
+            else:
+                # Prepend the anchor phrase
+                anchored_q = f"{anchor_phrase} {q}"
+                logger.debug(f"[ResearchPlanner] Anchored query: '{q}' -> '{anchored_q}'")
+                anchored_queries.append(anchored_q)
+
+        return anchored_queries
 
     def _fallback_plan(self, query: str) -> ResearchPlan:
         """Generate a comprehensive fallback plan if LLM plan generation fails."""

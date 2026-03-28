@@ -125,6 +125,20 @@ class DeepWebScraper:
         "weibo.com",
         "csdn.net",
 
+        # Japanese Q&A portals — massive source of hallucination-inducing noise
+        # (search engines return these for Japanese-language queries on any topic)
+        "chiebukuro.yahoo.co.jp",
+        "detail.chiebukuro.yahoo.co.jp",
+        "yahoo.co.jp",          # entire Japanese Yahoo network
+        "oshiete.goo.ne.jp",    # Japanese Q&A (goo answers)
+        "okwave.jp",            # Japanese Q&A platform
+        "oshiete1.goo.ne.jp",
+
+        # Korean portals / wikis
+        "namu.wiki",
+        "naver.com",
+        "kin.naver.com",
+
         # Japanese / other non-English forums
         "hinative.com",
         "lang-8.com",
@@ -152,6 +166,56 @@ class DeepWebScraper:
         "engadget.com",
         "wired.com",
         "gizmodo.com",
+
+        # Corporate / pharma / healthcare / consumer (false positives for name collisions)
+        "jnj.com", "investor.jnj.com", "careers.jnj.com",
+        "pfizer.com", "merck.com", "bayer.com",
+
+        # Gaming / chess / entertainment (false positives for algorithm terms)
+        "lichess.org", "en.lichess.org", "lichess.my",
+        "chess.com", "play.google.com", "apps.apple.com",
+        "filmweb.pl", "imdb.com",
+        "wwe.com", "espn.com", "espncricinfo.com",
+        "transfermarkt.com", "transfermarkt.co.in", "fcbayern.com",
+        "nzc.nz",
+
+        # Non-English forums and portals (irrelevant for English research)
+        "forum.benchmark.pl", "benchmark.pl",
+        "dxy.cn",  # Chinese medical Q&A
+        "iciba.com",  # Chinese dictionary
+        "polimetro.com", "cohotech.vn", "mundowin.com",
+        "vi.windowsnoticias.com", "vi.101-help.com",
+        "pchardwarepro.com", "tinhn.com", "smartcr.org",
+        "filmweb.pl",
+        "pt.stackoverflow.com", "es.stackoverflow.com",
+        "spanish.stackexchange.com",
+
+        # Government data portals (false positives for generic terms)
+        "data.gov.in", "data.gov",
+        "iras.gov.sg", "eservices.mas.gov.sg", "customs.gov.sg",
+        "ncert.nic.in",
+
+        # Generic learning portals (too broad for deep research)
+        "w3schools.com",
+        "simplilearn.com",
+        "numberanalytics.com",
+
+        # Wolfram product / marketing / function-reference pages
+        # These appear for any query containing "mathematical", "function", etc.
+        # but contain no research-specific content (no model papers, benchmarks, etc.)
+        "wolfram.com",
+        "functions.wolfram.com",
+        "reference.wolfram.com",
+        "mathematica.stackexchange.com",
+        # mathworld.wolfram.com intentionally kept — has legitimate math definitions
+
+        # General answer / how-to aggregators
+        "howtogeek.com",
+        "makeuseof.com",
+        "digitaltrends.com",
+
+        # Yahoo Answers global (shut down but still indexed)
+        "answers.yahoo.com",
     }
 
     # ─── Prioritized Domains ─────────────────────────────

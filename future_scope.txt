@@ -1,0 +1,373 @@
+ALBOT — FUTURE SCOPE & PLANNED FEATURES
+========================================
+(Feature #10 from the original list — Real-Time Web Search Integration into Chat —
+has already been implemented inside the existing web search functionality and is
+therefore excluded from this document.)
+
+
+─────────────────────────────────────────────────────────────────────────────────
+1. ADAPTIVE RESEARCH LOOP (Deep Research)
+─────────────────────────────────────────────────────────────────────────────────
+
+The Problem: The current pipeline is linear — plan is generated once, then executed
+mechanically regardless of what findings reveal. Real researchers adapt.
+
+What to Build: After each step completes, the orchestrator should pass the step's
+findings back to the planner and ask: "Given what we just learned, which remaining
+steps are still needed, which are now redundant, and what NEW steps should be
+added?" The planner returns a PlanRevision object containing steps to skip, steps
+to promote (execute earlier), and new steps to inject. The step queue becomes a
+dynamic priority queue rather than a static list.
+
+Integration points: ResearchPlanner gets a new revise_plan() async method. The
+orchestrator's research loop becomes a "while queue" pattern instead of
+"for step in plan.steps". The context graph gets a PLAN_REVISED edge type linking
+the original plan node to the new step nodes, preserving full provenance of why
+the plan changed. The frontend DeepResearchPanel.tsx would show a "Plan updated"
+badge when steps are dynamically added.
+
+
+─────────────────────────────────────────────────────────────────────────────────
+2. MULTI-AGENT RESEARCH CREW
+─────────────────────────────────────────────────────────────────────────────────
+
+The Problem: A single LLM agent doing all roles — planner, scraper, extractor,
+critic, synthesizer — creates quality bottlenecks and a single point of failure.
+
+What to Build: A crew of specialised async agents running concurrently:
+
+- PlannerAgent: Generates and revises the research plan (existing ResearchPlanner,
+  enhanced).
+- SearchAgent (xN): Executes web searches in parallel, one per research step.
+  Currently only 1 search runs at a time per step.
+- ExtractionAgent (xN): Runs RLM extraction. Currently 1 per page serially.
+- CriticAgent: After each step synthesis, scores the synthesis on 5 dimensions
+  (completeness, accuracy, depth, relevance, source diversity) and flags it for
+  re-research if below threshold. Uses LLMJudge which already exists in
+  llm_judge/llm_judge.py.
+- FactCheckerAgent: Takes every claim with a citation from the synthesis and
+  verifies the citation URL actually supports the claim by re-scraping and
+  re-querying the source.
+- SynthesisAgent: Existing synthesize_final enhanced with iterative refinement —
+  generates the report, then critiques it against the original query, then
+  regenerates weak sections.
+
+Integration: Create backend/core/deep_research/research_crew.py. The
+DeepResearchOrchestrator delegates to ResearchCrew.run() instead of orchestrating
+directly. Each agent is a lightweight class with a single async def run() method
+and an internal asyncio.Queue for input/output.
+
+
+─────────────────────────────────────────────────────────────────────────────────
+3. GRAPHRAG — COMMUNITY SUMMARISATION AND MULTI-HOP TRAVERSAL
+─────────────────────────────────────────────────────────────────────────────────
+
+The Problem: Your knowledge graph in ArangoDB is built and visualised, but
+retrieval only uses it for edge-hop proximity scoring (β weight in
+RetrievalWeights). The graph's structural intelligence — clusters of related
+concepts — is completely untapped for query answering.
+
+What to Build (inspired by Microsoft's GraphRAG paper):
+
+Part A — Community Detection and Summaries: After any ingestion, run Louvain
+community detection (python-louvain is already in requirements.txt) on the
+ArangoDB knowledge graph. For each detected community, use the LLM to generate a
+CommunitySummary — a 200-word paragraph describing what concepts this cluster
+contains and how they relate. Store these in a new community_summaries collection
+in ArangoDB. During query time, embed the query and find the top-K most relevant
+community summaries first. These provide high-level context before retrieving
+specific chunks.
+
+Part B — Multi-Hop Query Expansion: When the retrieval engine gets a query, it
+currently retrieves nodes within 2 hops of matched nodes. Extend this to run a
+multi_hop_subgraph_query in ArangoDB AQL that starts from matched nodes and
+follows edges of types REFERENCES, ENTITY_SHARED, DERIVED_FROM up to 3 hops,
+collecting all intermediate node content. Feed this traversal context to the LLM
+alongside the direct retrieval results.
+
+Integration: backend/core/graph/graph_builder.py gets a build_community_summaries()
+method triggered after every ingestion. backend/core/retrieval/retrieval_engine.py
+gets a graph_rag_retrieve() path that the orchestrator selects when query
+complexity is high (detected by question word count > 15 or presence of
+causal/comparative language).
+
+
+─────────────────────────────────────────────────────────────────────────────────
+4. HYDE — HYPOTHETICAL DOCUMENT EMBEDDINGS
+─────────────────────────────────────────────────────────────────────────────────
+
+The Problem: When a user asks "What are the tradeoffs between RAG and fine-tuning?",
+the embedding of that question looks nothing like the embedding of an academic paper
+that answers it. The semantic gap between question-style text and answer-style text
+degrades retrieval precision.
+
+What to Build: Before doing any vector retrieval, the LLM generates a hypothetical
+ideal answer to the query — roughly 150 words, written in the style of a document
+that would perfectly answer it. That hypothetical answer is then embedded (not the
+original query). The resulting embedding sits in "answer space" rather than
+"question space" and retrieves far more relevant documents. Run both embeddings
+(original query + hypothetical answer), retrieve top-K for each, then union and
+re-rank by score.
+
+Integration: Add a hyde_generate() method to EmbeddingEngine in embedding_engine.py.
+In retrieval_engine.py, add a use_hyde: bool parameter to the retrieve method,
+defaulting to True for queries longer than 8 words. The LLM call for HyDE uses
+async_complete() with max_tokens=250 and temperature=0.7 — it is intentionally
+creative to cast a wider retrieval net.
+
+
+─────────────────────────────────────────────────────────────────────────────────
+5. STREAMING RESEARCH REPORT WITH PROGRESSIVE RENDERING
+─────────────────────────────────────────────────────────────────────────────────
+
+The Problem: The final synthesis call (synthesize_final) waits 30-60 seconds and
+then dumps the entire 5000-word report at once. The user sees a spinner, then a
+wall of text.
+
+What to Build: Use the streaming API from each LLM provider (OpenAI's stream=True,
+Anthropic's stream=True) to yield tokens progressively. Add async_stream() to
+LLMRouter that returns an AsyncGenerator[str, None]. In synthesize_final, replace
+the single async_complete() call with async_stream() and yield each token through
+a new on_token callback. The orchestrator passes this callback through to the SSE
+stream endpoint (/research/{id}/stream). The frontend DeepResearchPanel.tsx appends
+tokens to a live-rendered markdown div. Users see the report being written in real
+time.
+
+Integration: LLMRouter.async_stream() yields str tokens. RecursiveResearchAgent
+gets synthesize_final_streaming() taking an on_token: Callable[[str], Awaitable[None]]
+parameter. The _run() background task in main.py passes a callback that pushes
+tokens into the SSE event queue. The existing event_generator() SSE function picks
+up "token" event types.
+
+
+─────────────────────────────────────────────────────────────────────────────────
+6. CROSS-SESSION RESEARCH MEMORY AND KNOWLEDGE ACCUMULATION
+─────────────────────────────────────────────────────────────────────────────────
+
+The Problem: Every deep research session starts from zero. If you researched
+"transformer attention mechanisms" yesterday, today's session on "efficient
+transformers" has no access to those findings.
+
+What to Build: After a research session completes, run a post-processing pipeline
+that:
+1. Extracts all Finding objects with importance >= 0.7
+2. Embeds each finding using EmbeddingEngine
+3. Stores them as MemoryFragment objects in ArangoDB with
+   namespace="research_knowledge", tagged with the original query, session ID,
+   and source domains
+4. Builds edges in the knowledge graph linking these research findings to any
+   existing KnowledgeAtom nodes that cover the same entities
+
+At the start of a new research session, the orchestrator queries the
+research_knowledge namespace for fragments semantically similar to the new query.
+These fragments are injected into the synthesize_final prompt as "Prior Research
+Context", labelled with their source sessions. The planner also receives these
+prior findings and can skip steps that are already well-covered.
+
+Integration: New ResearchMemoryIndexer class in backend/core/deep_research/.
+Called from the _run() background task in main.py after orchestrator.run_research()
+completes. The memory manager's existing store_fragment() and search_fragments()
+methods handle persistence and retrieval.
+
+
+─────────────────────────────────────────────────────────────────────────────────
+7. AUTOMATED KNOWLEDGE GRAPH POPULATION FROM RESEARCH FINDINGS
+─────────────────────────────────────────────────────────────────────────────────
+
+The Problem: Deep research generates hundreds of structured findings with entities,
+relationships, and citations — but none of this gets added to the ArangoDB
+knowledge graph. The graph only grows when files are explicitly ingested.
+
+What to Build: After each research session, run an entity-relationship extraction
+pass over all findings using a structured LLM prompt. The prompt asks the LLM to
+identify: (a) named entities (models, papers, authors, organisations, concepts),
+(b) relationships between them (X outperforms Y, X is-a-variant-of Y, X
+proposed-by Y), (c) confidence scores. These become KnowledgeAtom nodes and
+GraphEdge objects in ArangoDB, linked to their source research session. Over time,
+the knowledge graph becomes a rich, automatically-curated database of research
+findings.
+
+Integration: New ResearchGraphIngester in backend/core/deep_research/. Uses the
+existing graph_builder.py add_node() and add_edge() APIs. The entity extraction
+prompt is a structured JSON schema-constrained call using async_complete(). Runs
+as a non-blocking background task after session completion so it does not delay the
+user's result.
+
+
+─────────────────────────────────────────────────────────────────────────────────
+8. CONTRADICTION DETECTION AND CLAIM RECONCILIATION
+─────────────────────────────────────────────────────────────────────────────────
+
+The Problem: When 15 sources are scraped and hundreds of findings extracted,
+conflicting information is silently averaged away in synthesis. A paper from 2021
+might say X achieves 85% accuracy; a 2024 paper might say X only achieves 72% on
+a fairer benchmark. The synthesiser blends these without flagging the contradiction.
+
+What to Build: Before synthesize_step(), run a ContradictionDetector that:
+1. Groups findings by semantic similarity (using embedding cosine similarity,
+   threshold 0.75)
+2. Within each cluster, asks the LLM: "Do any of these findings contradict each
+   other? If yes, explain the nature of the contradiction and which finding is more
+   likely correct (consider publication year, source authority, methodology quality)."
+3. Returns ContradictionReport objects with: the contradicting findings, the nature
+   of conflict, and the reconciliation recommendation
+4. Injects ContradictionReport objects into the synthesize_step prompt with a
+   special section: "Known Contradictions in the Evidence" — forcing the
+   synthesiser to explicitly address them
+5. Stores contradiction edges in the context graph using the existing CONTRADICTS
+   edge type (already defined in ResearchEdgeType but currently never populated)
+
+Integration: New ContradictionDetector class in backend/core/deep_research/.
+Called from the orchestrator between extraction and step synthesis. The frontend
+can display contradiction counts as a quality signal next to each step.
+
+
+─────────────────────────────────────────────────────────────────────────────────
+9. INTELLIGENT SOURCE TRUST SCORING
+─────────────────────────────────────────────────────────────────────────────────
+
+The Problem: A preprint from an unknown lab and a Nature paper both get
+relevance_score: 0.0 in SourceInfo. The web scraper has domain priority but no
+per-source quality assessment.
+
+What to Build: A SourceTrustScorer that computes a multi-factor trust score for
+each scraped source:
+- Domain authority (0-40 pts): Priority domain list -> 40 pts, unknown domain ->
+  5 pts
+- Publication venue (0-25 pts): Detect if content mentions NeurIPS/ICML/ICLR/
+  Nature -> 25 pts; arXiv -> 15 pts; blog -> 5 pts
+- Citation count proxy (0-20 pts): Scrape api.semanticscholar.org/graph/v1/paper/
+  search?query=... with the paper title to get real citation counts (async, with
+  timeout)
+- Temporal relevance (0-15 pts): Extract publication year from content; papers
+  <= 2 years old -> 15 pts; <= 5 years -> 10 pts; older -> 5 pts
+
+The trust score feeds into finding importance weighting: findings from high-trust
+sources get their importance boosted by score/100. The final synthesis prompt
+receives sources sorted by trust score, and the LLM is instructed to weight
+high-trust findings more heavily in its claims.
+
+Integration: SourceTrustScorer sits in backend/core/deep_research/. Called after
+scraper.scrape_urls(), before RLM extraction. The SourceInfo model gets a
+trust_score: float field. The frontend shows trust badges on sources.
+
+
+─────────────────────────────────────────────────────────────────────────────────
+10. CODE REPOSITORY INGESTION AND CODE-AWARE RAG
+─────────────────────────────────────────────────────────────────────────────────
+
+The Problem: The multimodal processor handles PDFs, images, audio, video — but
+code repositories are not treated as first-class knowledge sources. Ingesting a
+GitHub repo just treats code files as text, losing all structural semantics
+(function signatures, call graphs, imports).
+
+What to Build: A CodeRepositoryIngester in backend/core/ingestion/ that:
+1. Walks a git repository (or a zip upload) and parses each file using tree-sitter
+   (language-agnostic AST parser)
+2. Extracts: function definitions with docstrings, class hierarchies, import
+   graphs, test cases
+3. Creates KnowledgeAtom nodes at three resolutions: file level (COARSE), function
+   level (MID), docstring/signature level (FINE)
+4. Builds GraphEdge relationships: CALLS, IMPORTS, IMPLEMENTS, TESTS
+5. Generates embedding-friendly textual descriptions of each function:
+   "Function embed_text in embedding_engine.py takes a list of strings and returns
+   a numpy array of shape (N, 1024). Uses sentence-transformers E5-Large model.
+   Called by retrieval_engine.py."
+
+For RAG queries about code ("How does the embedding engine work?", "What calls the
+web search?"), the graph traversal gives structurally correct, call-graph-informed
+answers instead of naive text similarity.
+
+
+─────────────────────────────────────────────────────────────────────────────────
+11. LLM-POWERED INGESTION QUALITY CONTROL
+─────────────────────────────────────────────────────────────────────────────────
+
+The Problem: When a PDF is ingested, there is no quality check. A corrupted PDF,
+a scanned-image PDF (no text), or a 1000-page book are all ingested with the same
+pipeline, often producing garbage embeddings.
+
+What to Build: A pre-ingestion ContentQualityGate that runs before any embedding:
+1. Text density check: If extracted text / total pages < 50 words per page, flag
+   as "likely scanned image PDF" and trigger OCR via Tesseract (already in
+   requirements).
+2. Language detection: If content is not English and no translation is configured,
+   skip or flag.
+3. Duplicate detection: Compute a MinHash signature of the document. Check against
+   existing signatures in SQLite. If Jaccard similarity > 0.9, reject as
+   near-duplicate and notify user.
+4. Content classification: Quick LLM call (50 tokens) to classify the document as:
+   academic paper, technical documentation, news article, blog post, book, etc.
+   This classification feeds into optimal chunking strategy (academic papers ->
+   larger chunks; news articles -> smaller chunks).
+5. Automatic metadata extraction: Extract title, authors, year, abstract, key terms
+   in a single LLM call. Store as node properties in ArangoDB.
+
+
+─────────────────────────────────────────────────────────────────────────────────
+12. PROACTIVE RESEARCH SUGGESTIONS
+─────────────────────────────────────────────────────────────────────────────────
+
+The Problem: After a deep research session completes, the user has a report but no
+guidance on what to investigate next. The system knows a lot — it has all the
+findings, the source graph, the identified contradictions — but stays silent.
+
+What to Build: After synthesize_final() completes, run a ResearchGapAnalyzer:
+1. Asks the LLM: "Given this research on [query] and these findings, what are the
+   3 most important follow-up research questions that would deepen understanding?
+   What specific knowledge gaps were identified?"
+2. Returns structured FollowUpQuestion objects:
+   {question: str, rationale: str, estimated_complexity: "quick|medium|deep",
+    suggested_first_query: str}
+3. These are stored in the session result and displayed in the frontend as a
+   "Research Further" section with one-click buttons that start a new research
+   session pre-populated with the follow-up question.
+
+Integration: ResearchGapAnalyzer is a single async method in rlm_engine.py. Called
+at the end of _finalize(). The ResearchResult model gets a
+follow_up_questions: List[FollowUpQuestion] field. The frontend
+DeepResearchPanel.tsx renders them as suggestion cards after the report.
+
+
+─────────────────────────────────────────────────────────────────────────────────
+13. RETRIEVAL-AUGMENTED FINE-TUNING DATA GENERATION
+─────────────────────────────────────────────────────────────────────────────────
+
+The Problem: Albot generates high-quality Q&A pairs implicitly — every query +
+retrieved context + synthesised answer is a perfect training example — but this
+data is thrown away.
+
+What to Build: A TrainingDataExporter that:
+1. After each successful chat turn (where the LLM judge scored quality >= 7/10),
+   packages: {instruction: query, context: retrieved_chunks, output: answer} into
+   JSONL format.
+2. After each deep research session, packages: {instruction: research_query,
+   context: all_findings_text, output: final_report} into fine-tuning format.
+3. Provides a GET /export/training-data endpoint that returns the accumulated JSONL.
+4. Optionally pushes to Hugging Face Hub via the existing HF_TOKEN in .env.
+
+This turns Albot into a self-improving dataset generator for domain-specific
+fine-tuning.
+
+
+─────────────────────────────────────────────────────────────────────────────────
+14. SEMANTIC SEARCH OVER RESEARCH HISTORY
+─────────────────────────────────────────────────────────────────────────────────
+
+The Problem: A user runs 50 research sessions over months. Finding a specific past
+report requires remembering the exact query. There is no way to search across past
+research by concept.
+
+What to Build: Index every completed research session's report and findings into a
+dedicated ArangoDB collection with full embeddings. Expose
+GET /research/search?q=... that does semantic search over past reports — not by
+query string but by conceptual similarity. Results show: session date, original
+query, report preview, and similarity score. The frontend sidebar gets a
+"Past Research" section with semantic search. This reuses the existing
+EmbeddingEngine.embed_query() and ArangoDB vector search infrastructure that is
+already built for the RAG knowledge base.
+
+
+─────────────────────────────────────────────────────────────────────────────────
+END OF FUTURE SCOPE DOCUMENT
+─────────────────────────────────────────────────────────────────────────────────

@@ -288,15 +288,16 @@ class RAGOrchestrator:
         # Step 1.5: Resolve namespace scope for retrieval
         retrieval_scope = self.namespace_resolver.resolve(chat_id)
         
-        # Step 1.6: Fetch full memory context (conversation history, fragments, web logs)
-        memory_context = ""
+        # Step 1.6: Fetch Chat History natively (no string stuffing)
+        chat_history = []
         try:
-            memory_context = self.memory.get_full_memory_context(chat_id)
-            if memory_context:
-                logger.info(f"Loaded memory context ({len(memory_context)} chars) for chat {chat_id}")
-        except Exception as mem_ctx_err:
-            logger.warning(f"Failed to load memory context (non-fatal): {mem_ctx_err}")
-        
+            raw_history = self.chat_storage.get_chat_history(chat_id, limit=40)  # Fetch last 40, will token-prune later
+            if raw_history:
+                # Map to standard ChatML format
+                chat_history = [{"role": msg["role"], "content": msg["content"]} for msg in raw_history]
+        except Exception as e:
+            logger.warning(f"Failed to load native chat history: {e}")
+            
         # Step 2: Retrieval with config and timing (SAME algorithms for both modes)
         retrieval_start = time.time()
         results, retrieval_metrics = self.retriever.retrieve(
@@ -315,7 +316,14 @@ class RAGOrchestrator:
                 memory_fragments_used = memory_results
             except Exception as mem_err:
                 logger.warning(f"Memory fragment search failed (non-fatal): {mem_err}")
-        
+                
+        # Step 2.6: Compile Semantic Context (Fragments + Web Logs)
+        semantic_context = ""
+        try:
+            semantic_context = self.memory.get_semantic_context(chat_id, memory_fragments_used)
+        except Exception as sem_err:
+            logger.warning(f"Failed to load semantic context (non-fatal): {sem_err}")
+
         # Cancellation checkpoint 2: After retrieval
         if self.is_cancelled(chat_id):
             return self._cancelled_response(chat_id, start_time, config, search_mode)
@@ -445,9 +453,9 @@ class RAGOrchestrator:
             return self._cancelled_response(chat_id, start_time, config, search_mode)
 
         if web_search_used:
-            answer = self._synthesize_with_web_context(query_text, evidence, memory_context)
+            answer = self._synthesize_with_web_context(query_text, evidence, semantic_context, chat_history)
         else:
-            answer = self._synthesize_answer(query_text, evidence, memory_context)
+            answer = self._synthesize_answer(query_text, evidence, semantic_context, chat_history)
         synthesis_time = (time.time() - synthesis_start) * 1000
         
         total_time = (time.time() - start_time) * 1000
@@ -788,9 +796,9 @@ class RAGOrchestrator:
         # Build the memory section if available
         memory_section = ""
         if memory_context:
-            memory_section = f"""\n=== SESSION MEMORY (conversation history & extracted knowledge) ===
+            memory_section = f"""\n=== RELEVANT SEMANTIC MEMORY ===
 {memory_context}
-=== END SESSION MEMORY ===\n"""
+================================\n"""
 
         return f"""{memory_section}Context:
 {evidence}
@@ -801,23 +809,47 @@ Instruction: {instruction}
 
 Answer:"""
 
-    def _synthesize_answer(self, query: str, evidence: str, memory_context: str = "") -> str:
-        """Use LLM to synthesize final answer from local knowledge base context."""
+    def _prune_chat_history(self, chat_history: List[Dict], max_tokens: int = 4000) -> List[Dict]:
+        """
+        Dynamically estimate tokens and drop oldest pairs if over budget.
+        Using a simple ~4 chars per token approximation for speed and safety.
+        """
+        if not chat_history:
+            return []
+            
+        pruned_history = []
+        current_tokens = 0
+        
+        # Build backwards to retain most recent messages
+        for msg in reversed(chat_history):
+            estimated_tokens = len(msg.get("content", "")) // 4
+            if current_tokens + estimated_tokens > max_tokens:
+                logger.info(f"Chat history pruned. Reached token capacity (~{current_tokens} tokens maintained)")
+                break
+            pruned_history.insert(0, msg)
+            current_tokens += estimated_tokens
+            
+        return pruned_history
+
+    def _synthesize_answer(self, query: str, evidence: str, semantic_context: str = "", chat_history: List[Dict] = None) -> str:
+        """Use LLM to synthesize final answer using arrays for history."""
 
         intent = self._detect_query_intent(query)
         system_prompt = self._build_system_prompt(query, intent)
-        user_prompt = self._build_user_prompt(query, evidence, intent, memory_context)
+        user_prompt = self._build_user_prompt(query, evidence, intent, semantic_context)
 
-        messages = [
-            {
-                "role": "user",
-                "content": user_prompt
-            }
-        ]
+        # 1. Start with pruned historical messages
+        history_arrays = self._prune_chat_history(chat_history[:-1] if chat_history else [], max_tokens=3000)
+        
+        # 2. Append the current turn
+        history_arrays.append({
+            "role": "user",
+            "content": user_prompt
+        })
         
         try:
             response = self.llm_router.complete(
-                messages=messages,
+                messages=history_arrays,
                 system_prompt=system_prompt,
                 max_tokens=1500,
                 temperature=0.4
@@ -870,7 +902,7 @@ Answer:"""
             
         return True
 
-    def _synthesize_with_web_context(self, query: str, evidence: str, memory_context: str = "") -> str:
+    def _synthesize_with_web_context(self, query: str, evidence: str, semantic_context: str = "", chat_history: List[Dict] = None) -> str:
         """Synthesize answer using web search context."""
 
         intent = self._detect_query_intent(query)
@@ -887,15 +919,20 @@ You have access to real-time web search results combined with local knowledge. A
 - **Flag genuine uncertainty.** If sources conflict on a key fact and you can't resolve it, acknowledge the disagreement briefly.
 - **Prioritize authoritative sources.** Official documentation, primary sources, and reputable publications take precedence over aggregator content."""
 
-        user_prompt = self._build_user_prompt(query, evidence, intent, memory_context)
+        user_prompt = self._build_user_prompt(query, evidence, intent, semantic_context)
 
-        messages = [
-            {"role": "user", "content": user_prompt}
-        ]
+        # 1. Start with pruned historical messages
+        history_arrays = self._prune_chat_history(chat_history[:-1] if chat_history else [], max_tokens=3000)
+        
+        # 2. Append the current turn
+        history_arrays.append({
+            "role": "user",
+            "content": user_prompt
+        })
 
         try:
             response = self.llm_router.complete(
-                messages=messages,
+                messages=history_arrays,
                 system_prompt=system_prompt,
                 max_tokens=1500,
                 temperature=0.4

@@ -209,18 +209,30 @@ class ResearchContextGraph:
         """Get all findings across all steps."""
         return self.get_nodes_by_type(ResearchNodeType.FINDING)
 
-    def get_all_sources(self) -> List[SourceInfo]:
-        """Get all web sources with their finding counts."""
+    def get_all_sources(self, with_findings_only: bool = True) -> List[SourceInfo]:
+        """
+        Get web sources with their finding counts.
+
+        Args:
+            with_findings_only: When True (default) only returns sources from which
+                at least one finding was actually extracted.  This prevents search-
+                result URLs that were never scraped (or were relevance-gated out)
+                from appearing in synthesis prompts — which would cause the LLM to
+                hallucinate content "about" those sources.
+        """
         sources = []
         for source_node in self.get_nodes_by_type(ResearchNodeType.WEB_SOURCE):
             # Count findings extracted from this source
             incoming = self.get_edges_to(source_node["id"], ResearchEdgeType.EXTRACTED_FROM)
+            findings_count = len(incoming)
+            if with_findings_only and findings_count == 0:
+                continue
             sources.append(SourceInfo(
                 url=source_node.get("url", ""),
                 title=source_node.get("title", ""),
                 domain=source_node.get("domain", ""),
                 relevance_score=0.0,
-                findings_count=len(incoming)
+                findings_count=findings_count,
             ))
         return sources
 

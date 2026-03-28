@@ -218,7 +218,31 @@ class WebSearchEngine:
         "thehindu.com",
         "news18.com",
         "indianexpress.com",
-
+        # Corporate / pharma (false positive for name collisions like "Johnson")
+        "jnj.com", "investor.jnj.com", "careers.jnj.com",
+        "pfizer.com", "merck.com", "bayer.com",
+        # Gaming / chess / entertainment
+        "lichess.org", "en.lichess.org", "lichess.my",
+        "chess.com", "play.google.com", "apps.apple.com",
+        "filmweb.pl", "imdb.com",
+        "wwe.com", "espn.com", "espncricinfo.com",
+        "transfermarkt.com", "transfermarkt.co.in", "fcbayern.com",
+        # Non-English forums
+        "forum.benchmark.pl", "benchmark.pl",
+        "dxy.cn", "iciba.com",
+        "polimetro.com", "cohotech.vn", "mundowin.com",
+        "pt.stackoverflow.com", "es.stackoverflow.com",
+        "spanish.stackexchange.com",
+        # Government data portals
+        "data.gov.in", "data.gov",
+        "iras.gov.sg", "customs.gov.sg",
+        "ncert.nic.in",
+        # Generic support / learning
+        "support.google.com", "support.microsoft.com", "support.apple.com",
+        "w3schools.com", "simplilearn.com", "numberanalytics.com",
+        # Generic Stack sites
+        "stackoverflow.com", "stackexchange.com",
+        "superuser.com", "serverfault.com",
     }
 
     def _fuse_results(

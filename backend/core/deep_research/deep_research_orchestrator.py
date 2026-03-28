@@ -259,7 +259,7 @@ class DeepResearchOrchestrator:
                 
                 # ── 2b. Scrape top URLs ──
                 remaining_budget = config.max_sources - total_sources_scraped
-                urls_to_scrape = list(dict.fromkeys(all_urls))[:min(8, remaining_budget)]
+                urls_to_scrape = list(dict.fromkeys(all_urls))[:min(15, remaining_budget)]
                 
                 if not urls_to_scrape:
                     # ── Retry: generate simpler fallback queries for this step ──
@@ -314,6 +314,22 @@ class DeepResearchOrchestrator:
                     if not page.success or not page.content:
                         continue
                     
+                    # ── Content Relevance Gate ──
+                    # Fast keyword check: skip pages that share almost no terms
+                    # with the research query. Prevents wasting LLM calls on
+                    # completely off-topic pages (e.g. jnj.com for "Johnson-Lindenstrauss")
+                    if not self._is_content_relevant(page.content, query, step.title):
+                        logger.info(f"[DeepResearch] Skipping irrelevant page: {page.domain} ({page.title[:50]})")
+                        await emit(ResearchProgressEvent(
+                            event_type="source_scraped",
+                            step_index=step_idx,
+                            total_steps=len(plan.steps),
+                            sources_scraped=total_sources_scraped,
+                            total_findings=total_findings,
+                            current_activity=f"Skipped irrelevant: {page.domain}",
+                        ))
+                        continue
+                    
                     total_sources_scraped += 1
                     
                     # Find or create source node
@@ -366,6 +382,71 @@ class DeepResearchOrchestrator:
                             total_findings=total_findings,
                             current_activity=f"Extracted {len(findings)} findings from {page.domain}",
                         ))
+                
+                # ── 2c-RETRY: If this step got 0 findings, retry with simpler queries ──
+                if step_findings_count == 0 and not self.is_cancelled(session_id):
+                    logger.warning(f"[DeepResearch] Step {step_idx} yielded 0 findings. Generating retry queries.")
+                    
+                    await emit(ResearchProgressEvent(
+                        event_type="search_completed",
+                        step_index=step_idx,
+                        total_steps=len(plan.steps),
+                        sources_scraped=total_sources_scraped,
+                        total_findings=total_findings,
+                        current_activity=f"Retrying step: {step.title} with simpler queries...",
+                    ))
+                    
+                    # Generate retry queries that anchor on the original research topic
+                    retry_queries = await planner.generate_follow_up_queries(
+                        step_title=step.title,
+                        findings_summary=f"Zero findings extracted. All scraped pages were off-topic. Original query: {query}. Step: {step.description}",
+                        original_query=query,
+                    )
+                    
+                    # Also add a dead-simple direct query
+                    core_terms = " ".join(query.split()[:4])
+                    retry_queries.append(f"{core_terms} {step.title.split()[0]} paper")
+                    
+                    retry_urls = []
+                    for rq in retry_queries[:3]:
+                        if self.is_cancelled(session_id):
+                            break
+                        try:
+                            search_results, _ = await self.web_search.search(rq, top_k=5)
+                            retry_urls.extend([r.url for r in search_results if r.url])
+                        except Exception as e:
+                            logger.warning(f"[DeepResearch] Retry search failed: {e}")
+                    
+                    retry_urls = list(dict.fromkeys(retry_urls))[:8]
+                    if retry_urls:
+                        retry_pages = await scraper.scrape_urls(retry_urls)
+                        for page in retry_pages:
+                            if not page.success or not page.content:
+                                continue
+                            if not self._is_content_relevant(page.content, query, step.title):
+                                continue
+                            
+                            total_sources_scraped += 1
+                            source_node_id = context_graph.add_source(
+                                url=page.url, title=page.title,
+                                domain=page.domain, content_length=len(page.content),
+                            )
+                            findings = await rlm.extract_findings(
+                                page_content=page.content, research_query=query,
+                                source_id=source_node_id, source_url=page.url,
+                                source_title=page.title, step_node_id=step_node_id,
+                            )
+                            step_findings_count += len(findings)
+                            total_findings += len(findings)
+                            if findings:
+                                await emit(ResearchProgressEvent(
+                                    event_type="findings_extracted",
+                                    step_index=step_idx,
+                                    total_steps=len(plan.steps),
+                                    sources_scraped=total_sources_scraped,
+                                    total_findings=total_findings,
+                                    current_activity=f"Retry extracted {len(findings)} findings from {page.domain}",
+                                ))
                 
                 # ── 2d. Synthesize this step ──
                 context_graph.update_node(step_node_id, {
@@ -466,8 +547,8 @@ class DeepResearchOrchestrator:
         else:
             report = f"# Research Report: {query}\n\nInsufficient data was gathered to generate a comprehensive report. Please try again with different search terms."
         
-        # Gather sources
-        sources = context_graph.get_all_sources()
+        # Gather only sources that actually yielded findings (not bare search-result URLs)
+        sources = context_graph.get_all_sources(with_findings_only=True)
         decision_trace = context_graph.get_decision_trace()
         graph_stats = context_graph.get_stats()
         
@@ -516,3 +597,82 @@ class DeepResearchOrchestrator:
         )
         
         return result
+
+    # ═══════════════════════════════════════════════════
+    # Content Relevance Heuristic
+    # ═══════════════════════════════════════════════════
+
+    @staticmethod
+    def _is_content_relevant(content: str, research_query: str, step_title: str = "") -> bool:
+        """
+        Two-tier keyword relevance gate.
+
+        Tier 1 — CORE ANCHOR (from research_query only):
+            Extracts distinctive terms from the actual research question.
+            If ANY of these core terms is absent from the page, the page is
+            HARD REJECTED — regardless of how many step-title words it contains.
+            This prevents Wolfram/math-reference sites from passing when the step
+            is "Mathematical Foundations of VJEPA 2.1" — "mathematical" and
+            "foundations" appear on Wolfram, but "vjepa" does not.
+
+        Tier 2 — BROAD OVERLAP (research_query + step_title combined):
+            For pages that pass Tier 1, also require at least 8 % overlap with
+            the combined anchor set when that set is large enough (≥ 5 terms).
+
+        Key design decision — separate the two tiers:
+            Before this fix the gate used combined_query for BOTH checks, so
+            generic step-title words (mathematical, foundations, architecture)
+            could substitute for the actual research topic words — allowing
+            completely off-topic pages to pass.
+        """
+        import re
+
+        if not content or not research_query:
+            return True
+
+        stopwords = {
+            "the", "and", "for", "are", "was", "were", "been", "with", "that",
+            "this", "from", "have", "has", "will", "what", "how", "why", "when",
+            "where", "which", "who", "about", "into", "using", "used", "use",
+            "new", "recent", "paper", "survey", "tutorial", "benchmark",
+            "approach", "method", "based", "model", "data",
+        }
+
+        # ── Tier 1: Core anchor terms from the research query ONLY ──
+        core_terms = {
+            word
+            for word in re.findall(r"[a-z]{3,}", research_query.lower())
+            if word not in stopwords
+        }
+
+        # Sample the first 12 000 chars — covers abstract + intro on most pages
+        content_sample = content[:12000].lower()
+
+        if core_terms and len(content) >= 300:
+            core_found = sum(1 for term in core_terms if term in content_sample)
+            if core_found == 0:
+                logger.debug(
+                    f"[DeepResearch] Relevance HARD REJECT: "
+                    f"0/{len(core_terms)} core query terms found "
+                    f"(core terms: {core_terms})"
+                )
+                return False
+
+        # ── Tier 2: Broad overlap across query + step title ──
+        all_terms = core_terms | {
+            word
+            for word in re.findall(r"[a-z]{3,}", step_title.lower())
+            if word not in stopwords
+        }
+
+        if len(all_terms) >= 5:
+            all_found = sum(1 for term in all_terms if term in content_sample)
+            overlap_ratio = all_found / len(all_terms)
+            if overlap_ratio < 0.08:
+                logger.debug(
+                    f"[DeepResearch] Relevance SOFT REJECT: {all_found}/{len(all_terms)} "
+                    f"({overlap_ratio:.0%}) terms found"
+                )
+                return False
+
+        return True

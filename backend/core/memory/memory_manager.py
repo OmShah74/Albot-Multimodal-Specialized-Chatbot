@@ -236,55 +236,34 @@ class MemoryManager:
     # Full Memory Context (for LLM injection)
     # ─────────────────────────────────────────────
 
-    def get_full_memory_context(self, session_id: str, max_history: int = 20) -> str:
+    def get_semantic_context(self, session_id: str, fragments: List[Dict] = None) -> str:
         """
-        Build a comprehensive memory context string from all session data.
-        This is injected into LLM prompts to give the model full awareness
-        of the conversation history, extracted knowledge, and web searches.
+        Build a semantic memory context string from relevant fragments and web searches.
+        This no longer includes chat history (which should be passed as native message arrays
+        to preserve LLM ChatML structures).
 
         Args:
             session_id: Chat session ID
-            max_history: Maximum number of recent messages to include
+            fragments: List of contextually relevant fragments (from vector search)
 
         Returns:
-            Formatted memory context string
+            Formatted semantic context string for the System Prompt
         """
         parts = []
 
-        # 1. Conversation history from SQLite messages table
-        try:
-            history = self.sqlite.get_chat_history(session_id, limit=max_history)
-            if history:
-                conv_lines = []
-                for msg in history:
-                    role_label = "User" if msg["role"] == "user" else "Assistant"
-                    content = msg["content"]
-                    # Truncate very long messages to avoid token overflow
-                    if len(content) > 800:
-                        content = content[:800] + "..."
-                    conv_lines.append(f"[{role_label}]: {content}")
-                parts.append("=== CONVERSATION HISTORY ===\n" + "\n\n".join(conv_lines))
-        except Exception as e:
-            logger.warning(f"Failed to load conversation history for context: {e}")
+        # 1. Semantic Memory Fragments (Targeted)
+        if fragments:
+            frag_lines = []
+            for f in fragments:
+                tags_str = ", ".join(f.get("tags", [])) if f.get("tags") else ""
+                frag_lines.append(
+                    f"[{f.get('fragment_type', 'knowledge')}] "
+                    f"{f.get('content', '')}"
+                    f"{' (tags: ' + tags_str + ')' if tags_str else ''}"
+                )
+            parts.append("=== RELEVANT MEMORY FRAGMENTS ===\n" + "\n".join(frag_lines))
 
-        # 2. Memory fragments (knowledge, solutions, entities, preferences)
-        try:
-            fragments = self.sqlite.get_session_fragments(session_id)
-            if fragments:
-                frag_lines = []
-                for f in fragments:
-                    tags_str = ", ".join(f.get("tags", [])) if f.get("tags") else ""
-                    score = f.get("importance_score", 0.5)
-                    frag_lines.append(
-                        f"[{f.get('fragment_type', 'knowledge')}] "
-                        f"{f['content']}"
-                        f"{' (tags: ' + tags_str + ')' if tags_str else ''}"
-                    )
-                parts.append("=== MEMORY FRAGMENTS ===\n" + "\n".join(frag_lines))
-        except Exception as e:
-            logger.warning(f"Failed to load memory fragments for context: {e}")
-
-        # 3. Web search history (URLs searched, results obtained)
+        # 2. Web search history (URLs searched, results obtained)
         try:
             web_logs = self.sqlite.get_web_interaction_logs(session_id)
             if web_logs:
@@ -301,7 +280,7 @@ class MemoryManager:
                         )
                 if web_lines:
                     parts.append(
-                        "=== WEB SEARCH HISTORY ===\n" + "\n".join(web_lines[:15])
+                        "=== RECENT WEB SEARCHES ===\n" + "\n".join(web_lines[:10])
                     )
         except Exception as e:
             logger.warning(f"Failed to load web history for context: {e}")

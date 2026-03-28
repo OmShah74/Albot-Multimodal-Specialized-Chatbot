@@ -196,7 +196,7 @@ class VectorizationEngine:
         Compute cosine similarity between two embeddings
         """
         return float(np.dot(emb1, emb2) / (np.linalg.norm(emb1) * np.linalg.norm(emb2)))
-    
+
     def batch_compute_similarities(
         self, 
         query_emb: np.ndarray, 

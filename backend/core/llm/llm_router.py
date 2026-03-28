@@ -90,6 +90,27 @@ class LLMRouter:
                     
         raise ValueError(f"Key '{name}' not found for provider {provider.value}")
     
+    async def async_complete(
+        self,
+        messages: List[Dict[str, str]],
+        system_prompt: Optional[str] = None,
+        max_tokens: int = 2000,
+        temperature: float = 0.7
+    ) -> str:
+        """
+        Async wrapper around complete() — runs the synchronous provider calls in a
+        thread-pool executor so they never block the asyncio event loop.
+
+        Use this in all async contexts (deep research, background tasks) to prevent
+        the event loop from stalling while waiting for LLM network I/O.
+        """
+        import asyncio
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None,
+            lambda: self.complete(messages, system_prompt, max_tokens, temperature),
+        )
+
     def complete(
         self,
         messages: List[Dict[str, str]],
@@ -99,7 +120,7 @@ class LLMRouter:
     ) -> str:
         """
         Generate completion with automatic fallback
-        
+
         Tries providers in order:
         1. Preferred provider (all keys)
         2. Other providers (all keys)
@@ -144,12 +165,19 @@ class LLMRouter:
                         logger.info(f"Rate limit hit for {provider.value}/{instance.name}, trying next key")
                         continue
                     
-                    # Check if context too long
-                    if "context_length" in str(e).lower() or "too long" in str(e).lower():
-                        logger.info("Context too long, trying provider with larger context")
-                        # Try Gemini (2M tokens) or Claude (200k tokens)
+                    # Check if context too long / request too large
+                    err_str = str(e).lower()
+                    if any(tok in err_str for tok in (
+                        "context_length", "too long", "too large",
+                        "request too large", "413", "maximum context",
+                        "context window", "exceeds", "token limit",
+                    )):
+                        logger.info(
+                            f"Context/size limit hit for {provider.value}/{instance.name}, "
+                            "trying provider with larger context window"
+                        )
                         if provider != LLMProvider.GEMINI:
-                            break  # Try different provider
+                            break  # Try different provider with larger context
         
         # All providers failed
         raise Exception(f"All LLM providers failed. Last error: {last_error}")
