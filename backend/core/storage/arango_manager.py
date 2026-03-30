@@ -517,39 +517,46 @@ class ArangoStorageManager:
         cursor = self.db.aql.execute(query)
         return {r['resolution']: r['count'] for r in cursor}
     
-    def get_full_graph_data(self, limit: int = 1500) -> Dict:
-        """Get full graph data formatted for frontend visualization (nodes and links).
-        Fetches nodes first to guarantee all ingested sources are represented,
-        then samples edges randomly to cover cross-source connections."""
+    def get_full_graph_data(self, limit: int = 0) -> Dict:
+        """Get graph data for frontend visualization.
+        limit=0 (default) fetches the entire graph without any caps.
+        A positive limit restricts the number of nodes returned."""
         try:
-            # 1. Fetch nodes first — guarantees every source is represented
-            nodes_query = f"""
-            FOR doc IN {self.config.nodes_collection}
-                LIMIT @limit
-                RETURN {{
+            node_return = """
+                RETURN {
                     id: doc._key,
                     name: doc.source ? doc.source : 'Knowledge Node',
-                    label: doc.content ? (LENGTH(doc.content) > 100 ? CONCAT(LEFT(doc.content, 100), '...') : doc.content) : 'Empty Content',
+                    label: doc.content ? (LENGTH(doc.content) > 100
+                           ? CONCAT(LEFT(doc.content, 100), '...')
+                           : doc.content) : 'Empty Content',
                     group: doc.modality ? doc.modality : 'text',
                     source: doc.source ? doc.source : 'unknown',
                     resolution: doc.resolution ? doc.resolution : 'unknown'
-                }}
+                }
             """
-            nodes = list(self.db.aql.execute(nodes_query, bind_vars={'limit': limit}))
+
+            if limit > 0:
+                nodes_query = (
+                    f"FOR doc IN {self.config.nodes_collection} "
+                    f"LIMIT @limit {node_return}"
+                )
+                nodes = list(self.db.aql.execute(
+                    nodes_query, bind_vars={'limit': limit}
+                ))
+            else:
+                nodes_query = (
+                    f"FOR doc IN {self.config.nodes_collection} {node_return}"
+                )
+                nodes = list(self.db.aql.execute(nodes_query))
 
             if not nodes:
                 return {"nodes": [], "links": []}
 
             node_id_set = {n['id'] for n in nodes}
 
-            # 2. Sample edges randomly so all sources get proportional coverage.
-            #    A bare LIMIT in insertion order would only return the first-
-            #    ingested source's edges, hiding later sources entirely.
-            edge_budget = limit * 4
+            # Fetch all edges — no limit, no random sampling
             edges_query = f"""
             FOR e IN {self.config.edges_collection}
-                SORT RAND()
-                LIMIT @fetch_limit
                 RETURN {{
                     id: e._key,
                     source: PARSE_IDENTIFIER(e._from).key,
@@ -558,20 +565,15 @@ class ArangoStorageManager:
                     weight: e.weight
                 }}
             """
-            raw_edges = list(self.db.aql.execute(
-                edges_query, bind_vars={'fetch_limit': edge_budget}
-            ))
+            raw_edges = list(self.db.aql.execute(edges_query))
 
-            # Keep only edges whose both endpoints are in the fetched node set
+            # Keep only edges whose both endpoints are in the node set
             edges = [
                 e for e in raw_edges
                 if e['source'] in node_id_set and e['target'] in node_id_set
             ]
 
-            return {
-                "nodes": nodes,
-                "links": edges,
-            }
+            return {"nodes": nodes, "links": edges}
         except Exception as e:
             logger.error(f"Failed to get full graph data: {e}")
             return {"nodes": [], "links": []}
