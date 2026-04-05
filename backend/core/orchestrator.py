@@ -251,6 +251,12 @@ class RAGOrchestrator:
         import time
         start_time = time.time()
         
+        # ── INITIALIZATION ──────────────────────────────────
+        # Fetch current chat title early for use in all return paths
+        current_chat = self.chat_storage.get_chat(chat_id)
+        current_title = current_chat.get("title", "New Chat") if current_chat else "New Chat"
+        new_title = current_title # Fallback for early exits
+        
         # Clear any previous cancellation for this chat
         self._clear_cancellation(chat_id)
         
@@ -259,7 +265,8 @@ class RAGOrchestrator:
             return {
                 "answer": "Please provide a query.",
                 "sources": [],
-                "metrics": {"total_time_ms": 0, "mode": "none", "search_mode": search_mode}
+                "metrics": {"total_time_ms": 0, "mode": "none", "search_mode": search_mode},
+                "chat_title": new_title
             }
         
         # Default config: Advanced mode with all algorithms
@@ -414,7 +421,8 @@ class RAGOrchestrator:
                         return {
                             "answer": "I apologize, but I couldn't retrieve reliable information from the web at this time due to a search provider failure. Please try again later.",
                             "sources": [],
-                            "metrics": failure_metrics
+                            "metrics": failure_metrics,
+                            "chat_title": new_title
                         }
 
             except Exception as e:
@@ -424,7 +432,8 @@ class RAGOrchestrator:
                      return {
                         "answer": "I encountered an error while searching the web and have no local information on this topic.",
                         "sources": [],
-                        "metrics": {"total_time_ms": round((time.time() - start_time) * 1000, 1), "search_mode": search_mode, "error": str(e)}
+                        "metrics": {"total_time_ms": round((time.time() - start_time) * 1000, 1), "search_mode": search_mode, "error": str(e)},
+                        "chat_title": new_title
                     }
         elif search_mode == "knowledge_base":
             logger.info("Knowledge Base mode - skipping web search fallback")
@@ -439,13 +448,15 @@ class RAGOrchestrator:
                 return {
                     "answer": "I don't have enough information in the knowledge base to fully answer this query. Try switching to **Web Search** mode for more comprehensive results.",
                     "sources": [],
-                    "metrics": {"total_time_ms": round((time.time() - start_time) * 1000, 1), "search_mode": search_mode, "status": "insufficient_kb"}
+                    "metrics": {"total_time_ms": round((time.time() - start_time) * 1000, 1), "search_mode": search_mode, "status": "insufficient_kb"},
+                    "chat_title": new_title
                 }
             else:
                 return {
                     "answer": "I have no information available to answer this query.",
                     "sources": [],
-                    "metrics": {"total_time_ms": round((time.time() - start_time) * 1000, 1), "search_mode": search_mode, "status": "no_context"}
+                    "metrics": {"total_time_ms": round((time.time() - start_time) * 1000, 1), "search_mode": search_mode, "status": "no_context"},
+                    "chat_title": new_title
                 }
 
         # Cancellation checkpoint 4: Before LLM synthesis
@@ -486,9 +497,16 @@ class RAGOrchestrator:
             sources=sources,
             metrics=metrics
         )
+        # ── Chat Auto-Naming: Generate title only for first turn or if title is generic ──────────
+        current_chat = self.chat_storage.get_chat(chat_id)
+        current_title = current_chat.get("title", "New Chat") if current_chat else "New Chat"
         
-        new_title = self._generate_chat_title(chat_id, query_text, answer)
-        
+        # Only auto-generate if title is the default "New Chat"
+        if current_title == "New Chat" and query_text and answer:
+            new_title = self._generate_chat_title(chat_id, query_text, answer)
+        else:
+            new_title = current_title
+            
         # ── Memory System: Post-synthesis processing ──────────
         try:
             import uuid
@@ -947,18 +965,21 @@ You have access to real-time web search results combined with local knowledge. A
         try:
             logger.info(f"Generating title for chat {chat_id}...")
 
+            # Using a more direct prompt to ensure 3-5 words
             system_prompt = (
-                "Generate a concise 3–5 word title that captures the topic of the conversation. "
-                "Use title case. No punctuation. No quotes. Return only the title, nothing else."
+                "You are a helpful assistant that generates extremely concise chat titles. "
+                "Task: Create a 3 to 5 word title for a technical chat based on the user's first prompt and assistant's first response. "
+                "Format: Title Case, no punctuation, no quotes, no 'Title:' prefix. "
+                "Output ONLY the 3-5 words."
             )
             
             messages = [
                 {
                     "role": "user", 
                     "content": (
-                        f"User message: {query[:200]}\n"
-                        f"Assistant response (first 200 chars): {answer[:200]}\n\n"
-                        "Title:"
+                        f"Please generate a 3-5 word title for this conversation:\n\n"
+                        f"User Prompt: {query[:300]}\n"
+                        f"Response Summary: {answer[:300]}"
                     )
                 }
             ]
@@ -966,19 +987,40 @@ You have access to real-time web search results combined with local knowledge. A
             response = self.llm_router.complete(
                 messages=messages,
                 system_prompt=system_prompt,
-                max_tokens=20,
-                temperature=0.5
+                max_tokens=40,
+                temperature=0.3
             )
             
-            clean_title = response.strip().strip('"').strip("'")
+            # Robust cleaning
+            clean_title = response.strip()
+            # Remove common prefixes
+            for prefix in ["Title:", "Chat Title:", "Topic:", "Subject:"]:
+                if clean_title.lower().startswith(prefix.lower()):
+                    clean_title = clean_title[len(prefix):].strip()
+            
+            # Remove punctuation and generic characters
+            clean_title = clean_title.strip('"').strip("'").strip("*").strip("#").strip()
+            
+            # Ensure it's not too long (limit to 10 words just in case)
+            words = clean_title.split()
+            if len(words) > 8:
+                clean_title = " ".join(words[:6])
+                
+            if not clean_title or len(clean_title) < 2:
+                logger.warning(f"Generated chat title is invalid. Using fallback. Raw: {response}")
+                clean_title = "New Chat"
+            else:
+                # Ensure title case
+                clean_title = clean_title.title()
+                
             self.chat_storage.rename_chat(chat_id, clean_title)
             logger.info(f"Auto-titled chat {chat_id} -> '{clean_title}'")
             return clean_title
             
         except Exception as e:
             logger.error(f"Failed to auto-title chat: {e}")
-            return None
-    
+            return "New Chat"
+
     def add_api_key(self, provider: str, name: str, key: str, model_name: Optional[str] = None):
         """Add an API key to the LLM router and save to storage"""
         from backend.models.config import LLMProvider

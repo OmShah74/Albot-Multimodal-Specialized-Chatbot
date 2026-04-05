@@ -7,6 +7,9 @@ import { cn } from '@/lib/utils';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNotification } from '@/context/NotificationContext';
 import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
+import 'katex/dist/katex.min.css';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { Copy, Check } from 'lucide-react';
@@ -580,7 +583,8 @@ export function ChatInterface({ chatId, onChatUpdated, onCreateSession }: ChatIn
                   <div className="flex flex-col gap-3">
                     <div className="prose prose-invert prose-base max-w-none prose-p:leading-relaxed prose-pre:my-4 prose-p:my-3 prose-headings:mb-4 prose-headings:mt-6 first:prose-headings:mt-0">
                       <ReactMarkdown
-                        remarkPlugins={[remarkGfm]}
+                        remarkPlugins={[remarkGfm, remarkMath]}
+                        rehypePlugins={[rehypeKatex]}
                         components={{
                           code: CodeBlock,
                           table: ({ children }) => (
@@ -632,7 +636,13 @@ export function ChatInterface({ chatId, onChatUpdated, onCreateSession }: ChatIn
                           )
                         }}
                       >
-                        {msg.content}
+                        {msg.content
+                          .replace(/\\\[/g, '$$$$')
+                          .replace(/\\\]/g, '$$$$')
+                          .replace(/\\\(/g, '$')
+                          .replace(/\\\)/g, '$')
+                          .replace(/\[\s*(\\(?:text|begin|frac|mathcal|sum|int|mathbb|mathbf|alpha|beta|gamma|Delta|theta|mu|pi|sigma|Omega|operatorname)[\s\S]*?)\s*\]/g, '$$$$ $1 $$$$')
+                        }
                       </ReactMarkdown>
                       <div className="mt-4 flex justify-end">
                          <button
