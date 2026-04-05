@@ -14,6 +14,7 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { Copy, Check } from 'lucide-react';
 import DeepResearchPanel from './DeepResearchPanel';
+import MermaidDiagram from './MermaidDiagram';
 
 interface ChatInterfaceProps {
   chatId: string | null;
@@ -36,6 +37,25 @@ const CodeBlock = ({ inline, className, children, ...props }: any) => {
     });
     setTimeout(() => setCopied(false), 2000);
   };
+
+  const codeString = String(children).replace(/\n$/, '');
+
+  if (!inline && match && match[1] === 'mermaid') {
+    return (
+       <div className="relative group my-4 w-full">
+          <div className="absolute top-2 right-2 z-20 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+            <button
+              onClick={handleCopy}
+              className="px-2 py-1 bg-black/40 hover:bg-black/60 rounded flex items-center gap-1.5 text-[10px] text-white backdrop-blur-md transition-colors border border-white/10 uppercase tracking-widest font-bold"
+            >
+              {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+              {copied ? 'COPIED' : 'COPY CODE'}
+            </button>
+          </div>
+          <MermaidDiagram chart={codeString} />
+       </div>
+    );
+  }
 
   return !inline && match ? (
     <div className="relative group rounded-xl overflow-hidden my-4 border border-white/10 bg-[#1e1e1e]">

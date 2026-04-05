@@ -85,7 +85,7 @@ class RAGOrchestrator:
         self.processor = MultimodalProcessor()
         
         # Web Search
-        self.web_search = WebSearchEngine()
+        self.web_search = WebSearchEngine(llm_router=self.llm_router)
         
         # Memory System
         self.memory = MemoryManager(self.chat_storage, self.storage, self.vectorizer)
@@ -782,6 +782,13 @@ class RAGOrchestrator:
 - Use bullet or numbered lists when presenting 3+ discrete items, steps, or options. Not for flowing prose.
 - Use code blocks (``` ```) for all code, commands, terminal output, config, and file paths.
 - Leave a blank line between paragraphs and between Markdown blocks for visual breathing room.
+
+**Mermaid Diagrams:**
+- When a visual diagram or graph is requested or appropriate, generate a Mermaid graph inside a ```mermaid code block.
+- **Syntax Strictness:** Never use spaces, hyphens, or special characters in Node IDs. Define node labels explicitly using quotes (e.g., `NodeA["Detailed Label (with Info)"]`).
+- **Structure Safety:** Define nodes and shapes first before establishing connections to prevent orphan links. Ensure every connection points to an explicitly defined node.
+- **Complexity:** Make the diagrams sufficiently detailed and accurately comprehensive for the topic at hand.
+- Use standard `flowchart TD` or `LR` unless another graph type is explicitly required.
 
 **Content:**
 - Never pad the response with restated context ("Based on the provided context, it appears that...") or meta-commentary ("This is a complex topic...").

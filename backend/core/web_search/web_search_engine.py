@@ -24,7 +24,8 @@ class WebSearchEngine:
     and returns the top-K fused results for LLM synthesis.
     """
     
-    def __init__(self):
+    def __init__(self, llm_router=None):
+        self.llm_router = llm_router
         self.providers = [
             DuckDuckGoProvider(max_results=8),
             # WikipediaProvider(max_results=3),
@@ -43,18 +44,23 @@ class WebSearchEngine:
         import time
         start_time = time.time()
         
-        # Step 0: Clean query
-        # Remove common "search for" prefixes that confuse engines
-        clean_query = re.sub(
-            r'^(please\s+)?(search\s+(the\s+web\s+)?for|find|google)\s+', 
-            '', 
-            query, 
-            flags=re.IGNORECASE
-        ).strip()
-
-        # Step 0b: Strip any site: operators — they don't work with our providers
-        # and cause zero-result failures. Convert to plain keywords instead.
-        clean_query = self._strip_search_operators(clean_query)
+        # Step 0: Clean and Optimize query
+        # If the query is an instruction rather than search keywords, use the LLM to extract keywords
+        clean_query = query.strip()
+        word_count = len(clean_query.split())
+        
+        if self.llm_router and word_count > 6 and any(cmd in clean_query.lower() for cmd in ['create', 'generate', 'explain', 'what is', 'diagram', 'write', 'detailed']):
+            logger.info("Conversational query detected. Optimizing with LLM...")
+            clean_query = await self._optimize_query_llm(clean_query)
+        else:
+            # Basic fallback cleaning
+            clean_query = re.sub(
+                r'^(please\s+)?(search\s+(the\s+web\s+)?for|find|google)\s+', 
+                '', 
+                clean_query, 
+                flags=re.IGNORECASE
+            ).strip()
+            clean_query = self._strip_search_operators(clean_query)
         
         logger.info(f"Original query: '{query}' -> Cleaned: '{clean_query}'")
         
@@ -100,6 +106,47 @@ class WebSearchEngine:
         )
         
         return fused, metrics
+
+    async def _optimize_query_llm(self, query: str) -> str:
+        """Use the LLM to extract pure search keywords from conversational instructions."""
+        user_prompt = f"""Extract ONLY the core technical search keywords from the following prompt.
+Remove instructional verbs (create, explain, draw) and formatting words (mermaid, diagram, chart, neatly, labelled).
+Return ONLY the raw keywords separated by spaces. No conversational text. No intro.
+
+Prompt: "{query}"
+
+Keywords:"""
+        try:
+            res = await self.llm_router.async_complete(
+                messages=[{"role": "user", "content": user_prompt}],
+                system_prompt=None,  # Moved everything to user prompt to avoid Groq system prompt bugs
+                max_tokens=50,
+                temperature=0.1
+            )
+            
+            # Clean up the response
+            extracted = res.replace('"', '').replace('\n', ' ').strip()
+            
+            logger.info(f"LLM query extraction result: '{extracted}'")
+            
+            # Fallback if empty
+            if not extracted:
+                return self._strip_search_operators(query)
+                
+            # If the response looks like valid keywords (not too long)
+            if len(extracted.split()) <= 15:
+                # final cleanup of common chatty prefixes
+                clean_res = re.sub(r'^(here are|the keywords|search keywords|keywords)(\s+are)?\s*:?\s*', '', extracted, flags=re.IGNORECASE)
+                clean_res = self._strip_search_operators(clean_res)
+                if len(clean_res.split()) <= 15:
+                    logger.info(f"Successfully extracted keywords: '{clean_res}'")
+                    return clean_res
+        except Exception as e:
+            logger.warning(f"LLM query optimization failed with exception: {e}")
+        
+        # Fallback to basic stripping
+        logger.warning("LLM query extraction rejected or failed, falling back to basic cleanup.")
+        return self._strip_search_operators(query)
 
     def _strip_search_operators(self, query: str) -> str:
         """
@@ -324,7 +371,17 @@ class WebSearchEngine:
     def _normalize_url(self, url: str) -> str:
         """Normalize a URL for deduplication."""
         url = url.strip().rstrip("/")
+        # Extract the real URL if it's a DuckDuckGo redirect (uddg parameter)
+        if 'uddg=' in url:
+            import urllib.parse
+            try:
+                uddg_part = url.split('uddg=')[1].split('&')[0]
+                url = urllib.parse.unquote(uddg_part)
+            except Exception:
+                pass
+                
         url = re.sub(r'^https?://(www\.)?', '', url)
+        # Strip query parameters and anchors to normalize domain and path
         url = url.split("?")[0].split("#")[0]
         return url.lower()
     
